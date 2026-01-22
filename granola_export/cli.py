@@ -278,6 +278,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         ("Documents", stats["documents"]),
         ("Transcripts", stats["transcripts"]),
         ("With Transcripts", stats["meetings_with_transcripts"]),
+        ("Folders", stats.get("folders", 0)),
         ("People", stats["people"]),
         ("Calendars", stats["calendars"]),
         ("Workspaces", stats["workspaces"]),

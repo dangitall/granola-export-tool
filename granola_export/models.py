@@ -152,6 +152,127 @@ class Panel:
 
 
 @dataclass
+class Attendee:
+    """Detailed attendee information with company and social links."""
+
+    email: str
+    name: str
+    company: Optional[str] = None
+    title: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    avatar_url: Optional[str] = None
+    raw_data: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Attendee":
+        """Create an Attendee from Granola's people.attendees format."""
+        email = data.get("email", "")
+        details = data.get("details", {})
+        person = details.get("person", {}) if isinstance(details, dict) else {}
+        company_info = details.get("company", {}) if isinstance(details, dict) else {}
+
+        name_info = person.get("name", {}) if isinstance(person, dict) else {}
+        employment = person.get("employment", {}) if isinstance(person, dict) else {}
+        linkedin = person.get("linkedin", {}) if isinstance(person, dict) else {}
+
+        return cls(
+            email=email,
+            name=name_info.get("fullName", email) if isinstance(name_info, dict) else email,
+            company=employment.get("name") or company_info.get("name"),
+            title=employment.get("title"),
+            linkedin_url=f"https://linkedin.com/{linkedin.get('handle')}" if linkedin.get("handle") else None,
+            avatar_url=person.get("avatar"),
+            raw_data=data,
+        )
+
+
+@dataclass
+class CalendarEvent:
+    """Google Calendar event details."""
+
+    id: str
+    summary: str
+    location: Optional[str] = None
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    html_link: Optional[str] = None
+    organizer_email: Optional[str] = None
+    raw_data: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CalendarEvent":
+        """Create a CalendarEvent from Granola's google_calendar_event format."""
+        start_time = None
+        end_time = None
+
+        start_data = data.get("start", {})
+        end_data = data.get("end", {})
+
+        if start_data.get("dateTime"):
+            try:
+                start_time = datetime.fromisoformat(start_data["dateTime"].replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+
+        if end_data.get("dateTime"):
+            try:
+                end_time = datetime.fromisoformat(end_data["dateTime"].replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+
+        organizer = data.get("organizer", {})
+
+        return cls(
+            id=data.get("id", ""),
+            summary=data.get("summary", ""),
+            location=data.get("location"),
+            description=data.get("description"),
+            start_time=start_time,
+            end_time=end_time,
+            html_link=data.get("htmlLink"),
+            organizer_email=organizer.get("email") if isinstance(organizer, dict) else None,
+            raw_data=data,
+        )
+
+
+@dataclass
+class Folder:
+    """A Granola folder/document list."""
+
+    id: str
+    title: str
+    description: Optional[str] = None
+    icon: Optional[dict] = None
+    workspace_id: Optional[str] = None
+    workspace_name: Optional[str] = None
+    is_favourited: bool = False
+    is_shared: bool = False
+    visibility: str = "private"
+    members: list[dict] = field(default_factory=list)
+    document_ids: list[str] = field(default_factory=list)
+    raw_data: dict = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_dict(cls, folder_id: str, metadata: dict, document_ids: list = None) -> "Folder":
+        """Create a Folder from metadata and document list."""
+        return cls(
+            id=folder_id,
+            title=metadata.get("title", "Untitled Folder"),
+            description=metadata.get("description"),
+            icon=metadata.get("icon"),
+            workspace_id=metadata.get("workspace_id"),
+            workspace_name=metadata.get("workspace_display_name"),
+            is_favourited=metadata.get("is_favourited", False),
+            is_shared=metadata.get("is_shared", False),
+            visibility=metadata.get("visibility", "private"),
+            members=metadata.get("members", []),
+            document_ids=document_ids or [],
+            raw_data=metadata,
+        )
+
+
+@dataclass
 class Document:
     """A Granola meeting document containing notes and metadata."""
 
@@ -161,10 +282,23 @@ class Document:
     updated_at: Optional[datetime] = None
     panels: list[Panel] = field(default_factory=list)
     participants: list[str] = field(default_factory=list)
+    attendees: list[Attendee] = field(default_factory=list)
+    calendar_event: Optional[CalendarEvent] = None
     calendar_event_id: Optional[str] = None
     workspace_id: Optional[str] = None
     folder_id: Optional[str] = None
     is_shared: bool = False
+    # Rich content fields
+    notes_markdown: Optional[str] = None
+    notes_plain: Optional[str] = None
+    summary: Optional[str] = None
+    overview: Optional[str] = None
+    # CRM integration links
+    hubspot_note_url: Optional[str] = None
+    affinity_note_id: Optional[str] = None
+    # Metadata
+    creation_source: Optional[str] = None
+    attachments: list[dict] = field(default_factory=list)
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -201,21 +335,24 @@ class Document:
                 if isinstance(panel, dict):
                     panels.append(Panel.from_dict(panel))
 
-        # Extract participants from people dict if present
+        # Extract participants and detailed attendees from people dict
         participants = data.get("participants", [])
-        if not participants and "people" in data:
-            people_data = data.get("people", {})
-            if isinstance(people_data, dict):
-                attendees = people_data.get("attendees", [])
-                for att in attendees:
-                    if isinstance(att, dict):
-                        email = att.get("email", "")
-                        details = att.get("details", {})
-                        person = details.get("person", {}) if isinstance(details, dict) else {}
-                        name_info = person.get("name", {}) if isinstance(person, dict) else {}
-                        name = name_info.get("fullName", email) if isinstance(name_info, dict) else email
-                        if name:
-                            participants.append(name)
+        attendees = []
+        people_data = data.get("people", {})
+        if isinstance(people_data, dict):
+            attendees_data = people_data.get("attendees", [])
+            for att in attendees_data:
+                if isinstance(att, dict):
+                    attendee = Attendee.from_dict(att)
+                    attendees.append(attendee)
+                    if attendee.name and attendee.name not in participants:
+                        participants.append(attendee.name)
+
+        # Parse calendar event
+        calendar_event = None
+        cal_event_data = data.get("google_calendar_event")
+        if isinstance(cal_event_data, dict):
+            calendar_event = CalendarEvent.from_dict(cal_event_data)
 
         return cls(
             id=doc_id,
@@ -224,10 +361,23 @@ class Document:
             updated_at=updated_at,
             panels=panels,
             participants=participants,
+            attendees=attendees,
+            calendar_event=calendar_event,
             calendar_event_id=data.get("calendarEventId") or data.get("calendar_event_id"),
             workspace_id=data.get("workspaceId") or data.get("workspace_id"),
             folder_id=data.get("folderId") or data.get("folder_id"),
             is_shared=data.get("isShared", data.get("is_shared", False)),
+            # Rich content
+            notes_markdown=data.get("notes_markdown"),
+            notes_plain=data.get("notes_plain"),
+            summary=data.get("summary"),
+            overview=data.get("overview"),
+            # CRM links
+            hubspot_note_url=data.get("hubspot_note_url"),
+            affinity_note_id=data.get("affinity_note_id"),
+            # Metadata
+            creation_source=data.get("creation_source"),
+            attachments=data.get("attachments", []),
             raw_data=data,
         )
 
@@ -242,7 +392,7 @@ class Document:
 
     def to_dict(self) -> dict:
         """Convert to a dictionary for serialization."""
-        return {
+        result = {
             "id": self.id,
             "title": self.title,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -257,11 +407,50 @@ class Document:
                 for p in self.panels
             ],
             "participants": self.participants,
+            "attendees": [
+                {
+                    "email": a.email,
+                    "name": a.name,
+                    "company": a.company,
+                    "title": a.title,
+                    "linkedin_url": a.linkedin_url,
+                    "avatar_url": a.avatar_url,
+                }
+                for a in self.attendees
+            ],
             "calendar_event_id": self.calendar_event_id,
             "workspace_id": self.workspace_id,
             "folder_id": self.folder_id,
             "is_shared": self.is_shared,
+            "notes_markdown": self.notes_markdown,
+            "notes_plain": self.notes_plain,
+            "summary": self.summary,
+            "overview": self.overview,
+            "creation_source": self.creation_source,
+            "attachments": self.attachments,
         }
+
+        # Add calendar event details if present
+        if self.calendar_event:
+            result["calendar_event"] = {
+                "id": self.calendar_event.id,
+                "summary": self.calendar_event.summary,
+                "location": self.calendar_event.location,
+                "description": self.calendar_event.description,
+                "start_time": self.calendar_event.start_time.isoformat() if self.calendar_event.start_time else None,
+                "end_time": self.calendar_event.end_time.isoformat() if self.calendar_event.end_time else None,
+                "html_link": self.calendar_event.html_link,
+                "organizer_email": self.calendar_event.organizer_email,
+            }
+
+        # Add CRM links if present
+        if self.hubspot_note_url or self.affinity_note_id:
+            result["crm_links"] = {
+                "hubspot_note_url": self.hubspot_note_url,
+                "affinity_note_id": self.affinity_note_id,
+            }
+
+        return result
 
 
 @dataclass

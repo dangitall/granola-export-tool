@@ -97,6 +97,26 @@ class JSONExporter(BaseExporter):
         with open(self.output_dir / "workspaces.json", "w", encoding="utf-8") as f:
             json.dump(workspaces_data, f, indent=2, ensure_ascii=False)
 
+        # Export folders
+        folders_data = [
+            {
+                "id": f.id,
+                "title": f.title,
+                "description": f.description,
+                "workspace_id": f.workspace_id,
+                "workspace_name": f.workspace_name,
+                "is_favourited": f.is_favourited,
+                "is_shared": f.is_shared,
+                "visibility": f.visibility,
+                "document_count": len(f.document_ids),
+                "document_ids": f.document_ids,
+                "members": f.members,
+            }
+            for f in self.cache.folders()
+        ]
+        with open(self.output_dir / "folders.json", "w", encoding="utf-8") as f:
+            json.dump(folders_data, f, indent=2, ensure_ascii=False)
+
         # Optional raw backup
         if self.include_raw:
             with open(self.output_dir / "raw_state.json", "w", encoding="utf-8") as f:
@@ -114,6 +134,7 @@ class JSONExporter(BaseExporter):
                 "people": str(self.output_dir / "people.json"),
                 "calendars": str(self.output_dir / "calendars.json"),
                 "workspaces": str(self.output_dir / "workspaces.json"),
+                "folders": str(self.output_dir / "folders.json"),
             },
             "errors": errors,
         }

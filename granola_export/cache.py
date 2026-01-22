@@ -18,6 +18,7 @@ from .models import (
     Person,
     Workspace,
     Calendar,
+    Folder,
 )
 
 
@@ -289,6 +290,45 @@ class GranolaCache:
             if isinstance(ws_data, dict):
                 yield Workspace.from_dict(ws_id, ws_data)
 
+    def folders(self) -> Iterator[Folder]:
+        """
+        Iterate over all folders/document lists.
+
+        Yields:
+            Folder objects with document IDs.
+        """
+        self._ensure_loaded()
+        lists_metadata = self._state.get("documentListsMetadata", {})
+        lists_data = self._state.get("documentLists", {})
+
+        for folder_id, metadata in lists_metadata.items():
+            if isinstance(metadata, dict):
+                # Get document IDs for this folder
+                doc_ids = lists_data.get(folder_id, [])
+                if isinstance(doc_ids, list):
+                    # Extract just IDs if it's a list of dicts
+                    doc_ids = [
+                        d.get("id") if isinstance(d, dict) else d
+                        for d in doc_ids
+                    ]
+                yield Folder.from_dict(folder_id, metadata, doc_ids)
+
+    def get_folder_for_document(self, doc_id: str) -> list[Folder]:
+        """
+        Get all folders that contain a specific document.
+
+        Args:
+            doc_id: The document ID.
+
+        Returns:
+            List of Folder objects containing this document.
+        """
+        result = []
+        for folder in self.folders():
+            if doc_id in folder.document_ids:
+                result.append(folder)
+        return result
+
     # -------------------------------------------------------------------------
     # Search and Filtering
     # -------------------------------------------------------------------------
@@ -416,6 +456,7 @@ class GranolaCache:
             "documents": self.document_count,
             "transcripts": self.transcript_count,
             "meetings_with_transcripts": with_transcripts,
+            "folders": len(self._state.get("documentListsMetadata", {})),
             "people": len(self._state.get("people", [])),
             "calendars": len(self._state.get("calendars", [])),
             "workspaces": len(self._state.get("workspacesById", {})),

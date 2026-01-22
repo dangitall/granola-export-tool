@@ -11,7 +11,16 @@ __version__ = "1.0.0"
 __author__ = "Granola Export Tool Contributors"
 
 from .cache import GranolaCache
-from .models import Document, Transcript, Meeting, Person, Workspace
+from .models import (
+    Document,
+    Transcript,
+    Meeting,
+    Person,
+    Workspace,
+    Folder,
+    Attendee,
+    CalendarEvent,
+)
 
 __all__ = [
     "GranolaCache",
@@ -20,4 +29,7 @@ __all__ = [
     "Meeting",
     "Person",
     "Workspace",
+    "Folder",
+    "Attendee",
+    "CalendarEvent",
 ]
