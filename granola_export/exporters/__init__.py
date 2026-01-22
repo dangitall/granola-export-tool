@@ -1,7 +1,7 @@
 """
 Export modules for different output formats.
 
-Supports JSON, Markdown, CSV, and HTML export formats.
+Supports JSON, Markdown, CSV, HTML, and direct API export formats.
 """
 
 from .base import BaseExporter
@@ -9,6 +9,7 @@ from .json_exporter import JSONExporter
 from .markdown_exporter import MarkdownExporter
 from .csv_exporter import CSVExporter
 from .html_exporter import HTMLExporter
+from .api_exporter import APIExporter
 
 __all__ = [
     "BaseExporter",
@@ -16,6 +17,7 @@ __all__ = [
     "MarkdownExporter",
     "CSVExporter",
     "HTMLExporter",
+    "APIExporter",
 ]
 
 
@@ -24,7 +26,7 @@ def get_exporter(format_name: str) -> type:
     Get the exporter class for a given format.
 
     Args:
-        format_name: The export format (json, markdown, csv, html).
+        format_name: The export format (json, markdown, csv, html, api).
 
     Returns:
         The exporter class.
@@ -38,6 +40,7 @@ def get_exporter(format_name: str) -> type:
         "md": MarkdownExporter,
         "csv": CSVExporter,
         "html": HTMLExporter,
+        "api": APIExporter,
     }
 
     format_lower = format_name.lower()

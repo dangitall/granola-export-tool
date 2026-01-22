@@ -382,6 +382,90 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_api_export(args: argparse.Namespace) -> int:
+    """Export directly from Granola API."""
+    print_header("Granola API Export")
+
+    from .exporters.api_exporter import APIExporter
+    from .api_client import get_token_from_local
+
+    # Check for token
+    if not args.token:
+        print("Checking for local API token...")
+        config = get_token_from_local()
+        if not config:
+            print_error(
+                "No API token found. Make sure Granola is installed and you're logged in.\n"
+                "Alternatively, provide a token with --token"
+            )
+            return 1
+        print_success("Found local API token")
+    else:
+        print("Using provided API token")
+
+    print(f"Output directory: {args.output}")
+    print()
+
+    # Create exporter
+    try:
+        exporter = APIExporter(
+            output_dir=args.output,
+            access_token=args.token,
+            include_transcripts=not args.no_transcripts,
+            include_shared=not args.no_shared,
+            workspace_id=args.workspace,
+        )
+    except ValueError as e:
+        print_error(str(e))
+        return 1
+
+    # Test connection
+    print("Testing API connection...")
+    if not exporter.client.check_connection():
+        print_error("Failed to connect to Granola API. Check your token and network.")
+        return 1
+    print_success("API connection successful")
+    print()
+
+    # Run export
+    print("Fetching data from Granola servers...")
+    print(c("(This may take a while for large accounts)", Colors.DIM))
+    print()
+
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="  %(message)s",
+    )
+
+    result = exporter.export()
+
+    print()
+    if result.success:
+        print_success(f"Exported {result.documents_exported} documents")
+        print_success(f"Exported {result.transcripts_exported} transcripts")
+        print(f"\nOutput: {result.output_path}")
+    else:
+        print_warning(f"Export completed with {len(result.errors)} errors")
+        for error in result.errors[:5]:
+            print_error(error)
+        if len(result.errors) > 5:
+            print(f"  ... and {len(result.errors) - 5} more errors")
+
+    # Summary
+    print()
+    print(c("Export Contents:", Colors.BOLD))
+    print(f"  all_meetings.json   - Combined export file")
+    print(f"  meetings/           - Individual meeting files")
+    print(f"  transcripts/        - Transcript data")
+    print(f"  workspaces.json     - Workspace info")
+    print(f"  folders.json        - Folder/list info")
+    print(f"  people.json         - Contacts data")
+    print(f"  manifest.json       - Export metadata")
+
+    return 0 if result.success else 1
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Check if Granola cache exists and is readable."""
     cache_path = args.cache_path or get_default_cache_path()
@@ -572,6 +656,40 @@ Examples:
         help="Check if Granola cache is accessible",
     )
 
+    # API Export command
+    api_parser = subparsers.add_parser(
+        "api-export",
+        help="Export directly from Granola API (includes shared docs)",
+    )
+    api_parser.add_argument(
+        "-o", "--output",
+        type=Path,
+        default=Path.home() / "granola-api-export",
+        help="Output directory (default: ~/granola-api-export)",
+    )
+    api_parser.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        help="API access token (default: use local token)",
+    )
+    api_parser.add_argument(
+        "--workspace",
+        type=str,
+        default=None,
+        help="Filter by workspace ID",
+    )
+    api_parser.add_argument(
+        "--no-transcripts",
+        action="store_true",
+        help="Skip fetching transcripts",
+    )
+    api_parser.add_argument(
+        "--no-shared",
+        action="store_true",
+        help="Skip fetching shared documents from folders",
+    )
+
     return parser
 
 
@@ -588,6 +706,8 @@ def main() -> int:
     # Route to command
     if args.command == "export":
         return cmd_export(args)
+    elif args.command == "api-export":
+        return cmd_api_export(args)
     elif args.command == "list":
         return cmd_list(args)
     elif args.command == "search":
