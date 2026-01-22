@@ -12,6 +12,12 @@ Extract your meetings, transcripts, and notes in multiple formats for backup, mi
   - **CSV**: Spreadsheet-friendly for analysis
   - **HTML**: Self-contained searchable report
 
+- **Direct API Access**
+  - Export directly from Granola's servers
+  - Includes shared documents not in local cache
+  - Fetches transcripts, workspaces, folders, and contacts
+  - Auto-detects API token from local Granola installation
+
 - **Powerful Search**
   - Full-text search across titles, notes, and transcripts
   - Filter by date range, transcript availability
@@ -27,7 +33,7 @@ Extract your meetings, transcripts, and notes in multiple formats for backup, mi
 ### From Source
 
 ```bash
-git clone https://github.com/your-username/granola-export-tool.git
+git clone https://github.com/haasonsaas/granola-export-tool.git
 cd granola-export-tool
 pip install -e .
 ```
@@ -176,6 +182,54 @@ Verify Granola cache is accessible.
 granola-export check
 ```
 
+### `api-export`
+
+Export directly from Granola's servers instead of local cache. This is useful for:
+- Fetching shared documents not in your local cache
+- Getting fresher data without waiting for sync
+- Team-wide exports with proper API access
+
+```bash
+granola-export api-export [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output` | Output directory (default: ~/granola-api-export) |
+| `--token` | API access token (default: auto-detect from local storage) |
+| `--workspace` | Filter by workspace ID |
+| `--no-transcripts` | Skip fetching transcripts |
+| `--no-shared` | Skip fetching shared documents from folders |
+
+**Examples:**
+
+```bash
+# Full API export with all data
+granola-export api-export
+
+# Quick export without transcripts
+granola-export api-export --no-transcripts
+
+# Export to specific directory
+granola-export api-export -o ~/backup/granola-api
+
+# Export with explicit token
+granola-export api-export --token "your-api-token"
+```
+
+**Output Structure:**
+
+```
+granola-api-export/
+├── all_meetings.json      # Combined export with all meetings
+├── meetings/              # Individual meeting JSON files
+├── transcripts/           # Transcript data per meeting
+├── workspaces.json        # Workspace information
+├── folders.json           # Document lists/folders
+├── people.json            # Contacts and user data
+└── manifest.json          # Export metadata and statistics
+```
+
 ## Export Formats
 
 ### JSON
@@ -280,6 +334,34 @@ result = exporter.export()
 print(f"Exported {result.documents_exported} documents")
 ```
 
+### API Client
+
+Access Granola's REST API directly:
+
+```python
+from granola_export import GranolaAPIClient
+
+# Auto-detect token from local Granola installation
+client = GranolaAPIClient.from_local_token()
+
+# Or use explicit token
+client = GranolaAPIClient.from_token("your-api-token")
+
+# Fetch all documents (with pagination)
+for doc in client.get_all_documents():
+    print(f"{doc['title']} - {doc['created_at']}")
+
+# Fetch shared documents by ID
+shared_docs = client.get_documents_batch(["doc-id-1", "doc-id-2"])
+
+# Get transcript for a document
+transcript = client.get_document_transcript("document-id")
+
+# Fetch workspaces and folders
+workspaces = client.get_workspaces()
+folders = client.get_document_lists()
+```
+
 ## Use Cases
 
 ### Corporate Migration
@@ -318,7 +400,7 @@ granola-export search "competitor analysis" --days 90
 
 ```bash
 # Clone and install in development mode
-git clone https://github.com/your-username/granola-export-tool.git
+git clone https://github.com/haasonsaas/granola-export-tool.git
 cd granola-export-tool
 pip install -e ".[dev]"
 
