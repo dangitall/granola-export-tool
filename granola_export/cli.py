@@ -15,7 +15,11 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -98,6 +102,67 @@ def truncate(text: str, max_length: int = 60) -> str:
     return text[: max_length - 3] + "..."
 
 
+def print_hint(text: str) -> None:
+    """Print a hint/help message."""
+    print(c(f"  → {text}", Colors.DIM))
+
+
+def visible_len(text: str) -> int:
+    """Return visible length of string (excluding ANSI codes)."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return len(ansi_escape.sub('', text))
+
+
+def pad_right(text: str, width: int) -> str:
+    """Pad string to width accounting for ANSI codes."""
+    visible = visible_len(text)
+    return text + " " * max(0, width - visible)
+
+
+class Spinner:
+    """Simple terminal spinner for long operations."""
+
+    def __init__(self, message: str = "Processing") -> None:
+        self.message = message
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def __enter__(self) -> "Spinner":
+        if not sys.stdout.isatty():
+            return self
+        self._running = True
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *args) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=0.5)
+        if sys.stdout.isatty():
+            sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
+            sys.stdout.flush()
+
+    def _spin(self) -> None:
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        idx = 0
+        while self._running:
+            frame = c(frames[idx % len(frames)], Colors.CYAN)
+            sys.stdout.write(f"\r{frame} {self.message}")
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.08)
+
+
+@contextmanager
+def timed_operation(operation_name: str):
+    """Context manager that reports operation duration."""
+    start = time.monotonic()
+    yield
+    elapsed = time.monotonic() - start
+    print(c(f"{operation_name} completed in {elapsed:.1f}s", Colors.DIM))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Commands
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,11 +174,13 @@ def cmd_export(args: argparse.Namespace) -> int:
 
     # Load cache
     try:
-        cache = GranolaCache(args.cache_path)
-        cache.load()
-        print(f"Loaded cache from: {cache.cache_path}")
+        with Spinner("Loading cache"):
+            cache = GranolaCache(args.cache_path)
+            cache.load()
+        print_success(f"Loaded cache from {cache.cache_path}")
     except FileNotFoundError as e:
         print_error(str(e))
+        print_hint("Run 'granola-export check' to verify your Granola installation")
         return 1
 
     # Get stats
@@ -133,7 +200,6 @@ def cmd_export(args: argparse.Namespace) -> int:
         return 1
 
     # Run export
-    print(f"Exporting to {args.format.upper()} format...")
     exporter = exporter_class(
         cache=cache,
         output_dir=output_dir,
@@ -141,12 +207,15 @@ def cmd_export(args: argparse.Namespace) -> int:
         include_raw=args.include_raw,
     )
 
-    result = exporter.export()
+    with Spinner(f"Exporting to {args.format.upper()}"):
+        with timed_operation("Export"):
+            result = exporter.export()
 
+    print()
     if result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
-        print(f"\nOutput: {result.output_path}")
+        print(f"\n📁 Output: {c(str(result.output_path), Colors.CYAN)}")
     else:
         print_warning(f"Export completed with {len(result.errors)} errors")
         for error in result.errors[:5]:
@@ -160,13 +229,13 @@ def cmd_export(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     """List all meetings."""
     try:
-        cache = GranolaCache(args.cache_path)
-        cache.load()
+        with Spinner("Loading"):
+            cache = GranolaCache(args.cache_path)
+            cache.load()
     except FileNotFoundError as e:
         print_error(str(e))
+        print_hint("Run 'granola-export check' to verify your Granola installation")
         return 1
-
-    print_header("Meetings")
 
     meetings = sorted(
         cache.meetings(),
@@ -177,23 +246,46 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.limit:
         meetings = meetings[: args.limit]
 
+    # JSON output for scripting
+    if getattr(args, 'json', False):
+        output = [
+            {
+                "id": m.id,
+                "title": m.title,
+                "date": m.created_at.isoformat() if m.created_at else None,
+                "has_transcript": m.has_transcript,
+            }
+            for m in meetings
+        ]
+        print(json.dumps(output, indent=2))
+        return 0
+
+    print_header("Meetings")
+
     if not meetings:
-        print("No meetings found.")
+        print(c("No meetings found.", Colors.DIM))
+        print()
+        print("This could mean:")
+        print_hint("Granola hasn't synced any meetings yet")
+        print_hint("The cache file is from a fresh install")
+        print()
+        print(f"Cache: {cache.cache_path}")
         return 0
 
     # Table header
-    print(f"{'Date':<20} {'Title':<45} {'Trans':>5}")
-    print(c("─" * 72, Colors.DIM))
+    print(f"{'Date':<20} {'Title':<45} {'Trans':>6}")
+    print(c("─" * 73, Colors.DIM))
 
     for meeting in meetings:
         date_str = format_date(meeting.created_at)
         title = truncate(meeting.title, 43)
-        transcript = c("✓", Colors.GREEN) if meeting.has_transcript else c("-", Colors.DIM)
+        transcript = c(" ✓", Colors.GREEN) if meeting.has_transcript else c(" -", Colors.DIM)
 
-        print(f"{date_str:<20} {title:<45} {transcript:>5}")
+        # Use pad_right for proper alignment with ANSI codes
+        print(f"{date_str:<20} {title:<45}{transcript}")
 
-    print(c("─" * 72, Colors.DIM))
-    print(f"Total: {len(meetings)} meetings")
+    print(c("─" * 73, Colors.DIM))
+    print(f"Total: {c(str(len(meetings)), Colors.CYAN)} meetings")
 
     return 0
 
@@ -391,19 +483,18 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     # Check for token
     if not args.token:
-        print("Checking for local API token...")
-        config = get_token_from_local()
+        with Spinner("Checking for API token"):
+            config = get_token_from_local()
         if not config:
-            print_error(
-                "No API token found. Make sure Granola is installed and you're logged in.\n"
-                "Alternatively, provide a token with --token"
-            )
+            print_error("No API token found")
+            print_hint("Make sure Granola is installed and you're logged in")
+            print_hint("Or provide a token with --token")
             return 1
         print_success("Found local API token")
     else:
-        print("Using provided API token")
+        print_success("Using provided API token")
 
-    print(f"Output directory: {args.output}")
+    print(f"📁 Output: {c(str(args.output), Colors.CYAN)}")
     print()
 
     # Create exporter
@@ -420,31 +511,29 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         return 1
 
     # Test connection
-    print("Testing API connection...")
-    if not exporter.client.check_connection():
-        print_error("Failed to connect to Granola API. Check your token and network.")
+    with Spinner("Testing API connection"):
+        connected = exporter.client.check_connection()
+    if not connected:
+        print_error("Failed to connect to Granola API")
+        print_hint("Check your token and network connection")
         return 1
-    print_success("API connection successful")
+    print_success("API connection verified")
     print()
 
     # Run export
-    print("Fetching data from Granola servers...")
-    print(c("(This may take a while for large accounts)", Colors.DIM))
-    print()
-
     import logging
     logging.basicConfig(
         level=logging.INFO,
         format="  %(message)s",
     )
 
-    result = exporter.export()
+    with timed_operation("API export"):
+        result = exporter.export()
 
     print()
     if result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
-        print(f"\nOutput: {result.output_path}")
     else:
         print_warning(f"Export completed with {len(result.errors)} errors")
         for error in result.errors[:5]:
@@ -454,14 +543,14 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     # Summary
     print()
-    print(c("Export Contents:", Colors.BOLD))
-    print(f"  all_meetings.json   - Combined export file")
-    print(f"  meetings/           - Individual meeting files")
-    print(f"  transcripts/        - Transcript data")
-    print(f"  workspaces.json     - Workspace info")
-    print(f"  folders.json        - Folder/list info")
-    print(f"  people.json         - Contacts data")
-    print(f"  manifest.json       - Export metadata")
+    print(c("📦 Export Contents:", Colors.BOLD))
+    print(f"  {c('all_meetings.json', Colors.CYAN)}   Combined export")
+    print(f"  {c('meetings/', Colors.CYAN)}           Individual meetings")
+    print(f"  {c('transcripts/', Colors.CYAN)}        Transcript data")
+    print(f"  {c('workspaces.json', Colors.CYAN)}     Workspace info")
+    print(f"  {c('folders.json', Colors.CYAN)}        Folder structure")
+    print(f"  {c('people.json', Colors.CYAN)}         Contacts")
+    print(f"  {c('manifest.json', Colors.CYAN)}       Export metadata")
 
     return 0 if result.success else 1
 
@@ -552,6 +641,14 @@ Examples:
     export_parser = subparsers.add_parser(
         "export",
         help="Export meetings to various formats",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                           Export to JSON (default)
+  %(prog)s -f markdown -o ~/notes    Export to Markdown
+  %(prog)s -f csv                    Export to CSV for spreadsheets
+  %(prog)s -f html                   Generate searchable HTML report
+        """,
     )
     export_parser.add_argument(
         "-f", "--format",
@@ -580,12 +677,24 @@ Examples:
     list_parser = subparsers.add_parser(
         "list",
         help="List all meetings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                    List all meetings
+  %(prog)s -n 10              Show last 10 meetings
+  %(prog)s --json             Output as JSON for scripting
+        """,
     )
     list_parser.add_argument(
         "-n", "--limit",
         type=int,
         default=None,
         help="Limit number of results",
+    )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON (for scripting)",
     )
 
     # Search command
