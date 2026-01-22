@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""
+Granola Export Tool CLI
+
+A comprehensive command-line interface for exporting and analyzing
+meeting notes and transcripts from the Granola app.
+
+Usage:
+    granola-export export [--format FORMAT] [--output DIR]
+    granola-export list [--limit N]
+    granola-export search QUERY
+    granola-export stats
+    granola-export show MEETING_ID
+"""
+
+import argparse
+import json
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+from . import __version__
+from .cache import GranolaCache, get_default_cache_path
+from .exporters import get_exporter
+from .search import MeetingSearcher, SearchQuery, quick_search
+
+
+# ANSI color codes for terminal output
+class Colors:
+    HEADER = "\033[95m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+
+def supports_color() -> bool:
+    """Check if the terminal supports color."""
+    import os
+
+    if os.getenv("NO_COLOR"):
+        return False
+    if not hasattr(sys.stdout, "isatty"):
+        return False
+    return sys.stdout.isatty()
+
+
+USE_COLOR = supports_color()
+
+
+def c(text: str, color: str) -> str:
+    """Colorize text if colors are supported."""
+    if USE_COLOR:
+        return f"{color}{text}{Colors.RESET}"
+    return text
+
+
+def print_header(text: str) -> None:
+    """Print a styled header."""
+    print()
+    print(c(f"{'─' * 60}", Colors.DIM))
+    print(c(f"  {text}", Colors.BOLD + Colors.CYAN))
+    print(c(f"{'─' * 60}", Colors.DIM))
+    print()
+
+
+def print_error(text: str) -> None:
+    """Print an error message."""
+    print(c(f"Error: {text}", Colors.RED), file=sys.stderr)
+
+
+def print_success(text: str) -> None:
+    """Print a success message."""
+    print(c(f"✓ {text}", Colors.GREEN))
+
+
+def print_warning(text: str) -> None:
+    """Print a warning message."""
+    print(c(f"! {text}", Colors.YELLOW))
+
+
+def format_date(dt: Optional[datetime]) -> str:
+    """Format a datetime for display."""
+    if not dt:
+        return "Unknown date"
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def truncate(text: str, max_length: int = 60) -> str:
+    """Truncate text with ellipsis."""
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3] + "..."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Commands
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Export Granola data to various formats."""
+    print_header("Granola Export")
+
+    # Load cache
+    try:
+        cache = GranolaCache(args.cache_path)
+        cache.load()
+        print(f"Loaded cache from: {cache.cache_path}")
+    except FileNotFoundError as e:
+        print_error(str(e))
+        return 1
+
+    # Get stats
+    stats = cache.get_stats()
+    print(f"Found {stats['documents']} documents, {stats['transcripts']} transcripts")
+    print()
+
+    # Prepare output directory
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get exporter
+    try:
+        exporter_class = get_exporter(args.format)
+    except ValueError as e:
+        print_error(str(e))
+        return 1
+
+    # Run export
+    print(f"Exporting to {args.format.upper()} format...")
+    exporter = exporter_class(
+        cache=cache,
+        output_dir=output_dir,
+        include_transcripts=not args.no_transcripts,
+        include_raw=args.include_raw,
+    )
+
+    result = exporter.export()
+
+    if result.success:
+        print_success(f"Exported {result.documents_exported} documents")
+        print_success(f"Exported {result.transcripts_exported} transcripts")
+        print(f"\nOutput: {result.output_path}")
+    else:
+        print_warning(f"Export completed with {len(result.errors)} errors")
+        for error in result.errors[:5]:
+            print_error(error)
+        if len(result.errors) > 5:
+            print(f"  ... and {len(result.errors) - 5} more errors")
+
+    return 0 if result.success else 1
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all meetings."""
+    try:
+        cache = GranolaCache(args.cache_path)
+        cache.load()
+    except FileNotFoundError as e:
+        print_error(str(e))
+        return 1
+
+    print_header("Meetings")
+
+    meetings = sorted(
+        cache.meetings(),
+        key=lambda m: m.created_at or datetime.min,
+        reverse=True,
+    )
+
+    if args.limit:
+        meetings = meetings[: args.limit]
+
+    if not meetings:
+        print("No meetings found.")
+        return 0
+
+    # Table header
+    print(f"{'Date':<20} {'Title':<45} {'Trans':>5}")
+    print(c("─" * 72, Colors.DIM))
+
+    for meeting in meetings:
+        date_str = format_date(meeting.created_at)
+        title = truncate(meeting.title, 43)
+        transcript = c("✓", Colors.GREEN) if meeting.has_transcript else c("-", Colors.DIM)
+
+        print(f"{date_str:<20} {title:<45} {transcript:>5}")
+
+    print(c("─" * 72, Colors.DIM))
+    print(f"Total: {len(meetings)} meetings")
+
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    """Search meetings."""
+    try:
+        cache = GranolaCache(args.cache_path)
+        cache.load()
+    except FileNotFoundError as e:
+        print_error(str(e))
+        return 1
+
+    print_header(f"Search: {args.query}")
+
+    # Build search query
+    search_query = SearchQuery(
+        text=args.query,
+        has_transcript=True if args.with_transcript else None,
+        case_sensitive=args.case_sensitive,
+        regex=args.regex,
+    )
+
+    if args.days:
+        search_query.date_from = datetime.now() - timedelta(days=args.days)
+
+    # Execute search
+    searcher = MeetingSearcher(cache)
+    results = list(searcher.search(search_query))
+
+    if not results:
+        print("No matching meetings found.")
+        return 0
+
+    # Sort by score
+    results.sort(key=lambda r: r.score, reverse=True)
+
+    if args.limit:
+        results = results[: args.limit]
+
+    for result in results:
+        meeting = result.meeting
+        date_str = format_date(meeting.created_at)
+
+        # Match type indicator
+        match_indicator = {
+            "title": c("[title]", Colors.GREEN),
+            "notes": c("[notes]", Colors.BLUE),
+            "transcript": c("[transcript]", Colors.CYAN),
+            "filter": c("[filter]", Colors.DIM),
+        }.get(result.match_type, "")
+
+        print(f"\n{c(meeting.title, Colors.BOLD)}")
+        print(f"  {c(date_str, Colors.DIM)} {match_indicator}")
+
+        if result.snippet and result.match_type != "filter":
+            snippet = truncate(result.snippet.replace("\n", " "), 80)
+            print(f"  {c('→', Colors.DIM)} {snippet}")
+
+        print(f"  {c(f'ID: {meeting.id[:8]}...', Colors.DIM)}")
+
+    print(f"\n{c(f'Found {len(results)} matching meetings', Colors.DIM)}")
+
+    return 0
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    """Show statistics about the Granola data."""
+    try:
+        cache = GranolaCache(args.cache_path)
+        cache.load()
+    except FileNotFoundError as e:
+        print_error(str(e))
+        return 1
+
+    print_header("Granola Statistics")
+
+    stats = cache.get_stats()
+
+    # Format stats nicely
+    stat_items = [
+        ("Documents", stats["documents"]),
+        ("Transcripts", stats["transcripts"]),
+        ("With Transcripts", stats["meetings_with_transcripts"]),
+        ("People", stats["people"]),
+        ("Calendars", stats["calendars"]),
+        ("Workspaces", stats["workspaces"]),
+        ("Total Words (transcripts)", f"{stats['total_transcript_words']:,}"),
+    ]
+
+    max_label = max(len(item[0]) for item in stat_items)
+
+    for label, value in stat_items:
+        print(f"  {label:<{max_label + 2}} {c(str(value), Colors.CYAN)}")
+
+    print()
+    print(c(f"Cache: {stats['cache_path']}", Colors.DIM))
+
+    # Recent activity
+    print()
+    print(c("Recent Activity:", Colors.BOLD))
+
+    meetings = list(cache.meetings())
+    recent = [
+        m
+        for m in meetings
+        if m.created_at and m.created_at >= datetime.now() - timedelta(days=7)
+    ]
+
+    print(f"  Last 7 days: {len(recent)} meetings")
+
+    if meetings:
+        dates = [m.created_at for m in meetings if m.created_at]
+        if dates:
+            oldest = min(dates)
+            newest = max(dates)
+            print(f"  Date range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}")
+
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    """Show details of a specific meeting."""
+    try:
+        cache = GranolaCache(args.cache_path)
+        cache.load()
+    except FileNotFoundError as e:
+        print_error(str(e))
+        return 1
+
+    # Find the meeting
+    meeting = None
+    for m in cache.meetings():
+        if m.id == args.meeting_id or m.id.startswith(args.meeting_id):
+            meeting = m
+            break
+
+    if not meeting:
+        print_error(f"Meeting not found: {args.meeting_id}")
+        return 1
+
+    print_header(meeting.title)
+
+    # Metadata
+    print(f"{c('ID:', Colors.BOLD)} {meeting.id}")
+    print(f"{c('Date:', Colors.BOLD)} {format_date(meeting.created_at)}")
+
+    if meeting.document.participants:
+        print(f"{c('Participants:', Colors.BOLD)} {', '.join(meeting.document.participants)}")
+
+    print(f"{c('Has Transcript:', Colors.BOLD)} {'Yes' if meeting.has_transcript else 'No'}")
+
+    # Panels/Notes
+    if meeting.document.panels:
+        print()
+        print(c("Notes:", Colors.BOLD))
+        print(c("─" * 40, Colors.DIM))
+
+        for panel in meeting.document.panels:
+            if panel.title:
+                print(f"\n{c(panel.title, Colors.CYAN)}")
+            if panel.content:
+                # Indent content
+                for line in panel.content.split("\n"):
+                    print(f"  {line}")
+
+    # Transcript summary
+    if meeting.has_transcript:
+        print()
+        print(c("Transcript:", Colors.BOLD))
+        print(c("─" * 40, Colors.DIM))
+        print(f"  Words: {meeting.transcript.word_count:,}")
+        print(f"  Segments: {len(meeting.transcript.segments)}")
+
+        if args.show_transcript:
+            print()
+            print(meeting.transcript.full_text)
+
+    # JSON output
+    if args.json:
+        print()
+        print(c("JSON:", Colors.BOLD))
+        print(json.dumps(meeting.to_dict(), indent=2, default=str))
+
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Check if Granola cache exists and is readable."""
+    cache_path = args.cache_path or get_default_cache_path()
+
+    print_header("Granola Cache Check")
+
+    print(f"Expected path: {cache_path}")
+
+    if not cache_path.exists():
+        print_error("Cache file not found!")
+        print()
+        print("Make sure Granola is installed and has been run at least once.")
+        print("The app stores its data at:")
+        print(f"  macOS:   ~/Library/Application Support/Granola/cache-v3.json")
+        print(f"  Windows: %APPDATA%\\Granola\\cache-v3.json")
+        return 1
+
+    print_success("Cache file found")
+
+    # Try to load it
+    try:
+        cache = GranolaCache(cache_path)
+        cache.load()
+        print_success("Cache loaded successfully")
+
+        stats = cache.get_stats()
+        print(f"\n  Documents: {stats['documents']}")
+        print(f"  Transcripts: {stats['transcripts']}")
+
+    except json.JSONDecodeError:
+        print_error("Cache file is corrupted or invalid JSON")
+        return 1
+    except Exception as e:
+        print_error(f"Failed to load cache: {e}")
+        return 1
+
+    return 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main Entry Point
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="granola-export",
+        description="Export and analyze meeting notes from the Granola app.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s export                     Export to JSON (default)
+  %(prog)s export -f markdown -o ~/notes  Export to Markdown
+  %(prog)s list --limit 10            List recent 10 meetings
+  %(prog)s search "product roadmap"   Search for meetings
+  %(prog)s stats                      Show statistics
+  %(prog)s show abc123                Show meeting details
+        """,
+    )
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    parser.add_argument(
+        "--cache-path",
+        type=Path,
+        default=None,
+        help="Path to Granola cache file (default: auto-detect)",
+    )
+
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # Export command
+    export_parser = subparsers.add_parser(
+        "export",
+        help="Export meetings to various formats",
+    )
+    export_parser.add_argument(
+        "-f", "--format",
+        choices=["json", "markdown", "md", "csv", "html"],
+        default="json",
+        help="Export format (default: json)",
+    )
+    export_parser.add_argument(
+        "-o", "--output",
+        type=Path,
+        default=Path.home() / "granola-export",
+        help="Output directory (default: ~/granola-export)",
+    )
+    export_parser.add_argument(
+        "--no-transcripts",
+        action="store_true",
+        help="Exclude transcript data from export",
+    )
+    export_parser.add_argument(
+        "--include-raw",
+        action="store_true",
+        help="Include raw/original data in export",
+    )
+
+    # List command
+    list_parser = subparsers.add_parser(
+        "list",
+        help="List all meetings",
+    )
+    list_parser.add_argument(
+        "-n", "--limit",
+        type=int,
+        default=None,
+        help="Limit number of results",
+    )
+
+    # Search command
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Search meetings",
+    )
+    search_parser.add_argument(
+        "query",
+        help="Search query",
+    )
+    search_parser.add_argument(
+        "-n", "--limit",
+        type=int,
+        default=20,
+        help="Limit number of results (default: 20)",
+    )
+    search_parser.add_argument(
+        "--days",
+        type=int,
+        help="Only search meetings from last N days",
+    )
+    search_parser.add_argument(
+        "--with-transcript",
+        action="store_true",
+        help="Only show meetings with transcripts",
+    )
+    search_parser.add_argument(
+        "--case-sensitive",
+        action="store_true",
+        help="Case-sensitive search",
+    )
+    search_parser.add_argument(
+        "--regex",
+        action="store_true",
+        help="Treat query as regular expression",
+    )
+
+    # Stats command
+    subparsers.add_parser(
+        "stats",
+        help="Show statistics about Granola data",
+    )
+
+    # Show command
+    show_parser = subparsers.add_parser(
+        "show",
+        help="Show details of a specific meeting",
+    )
+    show_parser.add_argument(
+        "meeting_id",
+        help="Meeting ID (can be partial)",
+    )
+    show_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON",
+    )
+    show_parser.add_argument(
+        "--show-transcript",
+        action="store_true",
+        help="Show full transcript text",
+    )
+
+    # Check command
+    subparsers.add_parser(
+        "check",
+        help="Check if Granola cache is accessible",
+    )
+
+    return parser
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    # Handle --no-color
+    global USE_COLOR
+    if args.no_color:
+        USE_COLOR = False
+
+    # Route to command
+    if args.command == "export":
+        return cmd_export(args)
+    elif args.command == "list":
+        return cmd_list(args)
+    elif args.command == "search":
+        return cmd_search(args)
+    elif args.command == "stats":
+        return cmd_stats(args)
+    elif args.command == "show":
+        return cmd_show(args)
+    elif args.command == "check":
+        return cmd_check(args)
+    else:
+        parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
