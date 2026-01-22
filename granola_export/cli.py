@@ -300,7 +300,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
     recent = [
         m
         for m in meetings
-        if m.created_at and m.created_at >= datetime.now() - timedelta(days=7)
+        if m.created_at and m.created_at.replace(tzinfo=None) >= datetime.now() - timedelta(days=7)
     ]
 
     print(f"  Last 7 days: {len(recent)} meetings")
