@@ -56,17 +56,19 @@ class BaseExporter(ABC):
         """
         pass
 
-    def _safe_filename(self, name: str, max_length: int = 50) -> str:
+    def _safe_filename(self, name: Optional[str], max_length: int = 50) -> str:
         """
         Convert a string to a safe filename.
 
         Args:
-            name: The original string.
+            name: The original string (can be None).
             max_length: Maximum filename length.
 
         Returns:
             A filesystem-safe filename.
         """
+        if not name:
+            name = "Untitled"
         # Replace unsafe characters
         safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
         # Collapse multiple underscores
