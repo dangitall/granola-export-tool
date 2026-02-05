@@ -476,7 +476,10 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def cmd_api_export(args: argparse.Namespace) -> int:
     """Export directly from Granola API."""
-    print_header("Granola API Export")
+    if args.sync:
+        print_header("Granola API Sync")
+    else:
+        print_header("Granola API Export")
 
     from .exporters.api_exporter import APIExporter
     from .api_client import get_token_from_local
@@ -505,6 +508,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
             include_transcripts=not args.no_transcripts,
             include_shared=not args.no_shared,
             workspace_id=args.workspace,
+            sync_mode=args.sync,
         )
     except ValueError as e:
         print_error(str(e))
@@ -797,6 +801,11 @@ Examples:
         "--no-shared",
         action="store_true",
         help="Skip fetching shared documents from folders",
+    )
+    api_parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Incremental sync: only download new/changed meetings",
     )
 
     return parser
