@@ -14,6 +14,7 @@ from typing import Optional
 from .base import BaseExporter
 from ..api_client import GranolaAPIClient, get_token_from_local
 from ..models import ExportResult
+from ..utils import safe_filename
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +155,7 @@ class APIExporter(BaseExporter):
         # Write individual document files
         for doc in all_documents:
             doc_id = doc.get("id", "unknown")
-            title = doc.get("title", "Untitled")
-            safe_title = self._safe_filename(title)
+            safe_title = safe_filename(doc.get("title"))
             filename = f"{safe_title}_{doc_id[:8]}.json"
 
             with open(meetings_dir / filename, "w") as f:
@@ -245,10 +245,3 @@ class APIExporter(BaseExporter):
             format="api",
             errors=errors,
         )
-
-    def _safe_filename(self, name: str, max_length: int = 50) -> str:
-        """Convert a string to a safe filename."""
-        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
-        while "__" in safe:
-            safe = safe.replace("__", "_")
-        return safe[:max_length].strip(" _-")
