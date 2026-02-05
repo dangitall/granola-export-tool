@@ -36,6 +36,9 @@ classifiers = [
     "Topic :: Office/Business",
     "Topic :: Utilities",
 ]
+dependencies = [
+    "rich>=13.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/your-username/granola-export-tool"
