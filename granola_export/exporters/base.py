@@ -8,6 +8,7 @@ from typing import Optional
 
 from ..cache import GranolaCache
 from ..models import ExportResult
+from ..utils import safe_filename
 
 
 class BaseExporter(ABC):
@@ -56,21 +57,6 @@ class BaseExporter(ABC):
         """
         pass
 
-    def _safe_filename(self, name: str, max_length: int = 50) -> str:
-        """
-        Convert a string to a safe filename.
-
-        Args:
-            name: The original string.
-            max_length: Maximum filename length.
-
-        Returns:
-            A filesystem-safe filename.
-        """
-        # Replace unsafe characters
-        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
-        # Collapse multiple underscores
-        while "__" in safe:
-            safe = safe.replace("__", "_")
-        # Trim and strip
-        return safe[:max_length].strip(" _-")
+    def _safe_filename(self, name: Optional[str], max_length: int = 50) -> str:
+        """Convert a string to a filesystem-safe filename."""
+        return safe_filename(name, max_length)
