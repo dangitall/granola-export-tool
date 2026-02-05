@@ -7,9 +7,12 @@ Useful for shared documents and team-wide exports.
 
 import json
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from .base import BaseExporter
 from ..api_client import GranolaAPIClient, get_token_from_local
@@ -239,33 +242,76 @@ class APIExporter(BaseExporter):
 
         # Fetch transcripts (only for documents we're writing)
         trans_exported = 0
-        if self.include_transcripts:
-            logger.info("Fetching transcripts...")
+        if self.include_transcripts and docs_to_write:
+            # Use progress bar if running in a terminal
+            use_progress = sys.stdout.isatty()
 
-            for doc in docs_to_write:
-                doc_id = doc.get("id")
-                if not doc_id:
-                    continue
+            if use_progress:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    transient=True,
+                ) as progress:
+                    task = progress.add_task(
+                        "Fetching transcripts...", total=len(docs_to_write)
+                    )
 
-                try:
-                    transcript = self.client.get_document_transcript(doc_id)
-                    if transcript:
-                        filename = f"transcript_{doc_id[:8]}.json"
-                        with open(transcripts_dir / filename, "w") as f:
-                            json.dump(
-                                {
-                                    "document_id": doc_id,
-                                    "title": doc.get("title"),
-                                    "transcript": transcript,
-                                },
-                                f,
-                                indent=2,
-                            )
-                        trans_exported += 1
-                except Exception as e:
-                    # 404 is expected for docs without transcripts
-                    if "404" not in str(e):
-                        errors.append(f"Error fetching transcript for {doc_id}: {e}")
+                    for doc in docs_to_write:
+                        doc_id = doc.get("id")
+                        if not doc_id:
+                            progress.advance(task)
+                            continue
+
+                        try:
+                            transcript = self.client.get_document_transcript(doc_id)
+                            if transcript:
+                                filename = f"transcript_{doc_id[:8]}.json"
+                                with open(transcripts_dir / filename, "w") as f:
+                                    json.dump(
+                                        {
+                                            "document_id": doc_id,
+                                            "title": doc.get("title"),
+                                            "transcript": transcript,
+                                        },
+                                        f,
+                                        indent=2,
+                                    )
+                                trans_exported += 1
+                        except Exception as e:
+                            # 404 is expected for docs without transcripts
+                            if "404" not in str(e):
+                                errors.append(f"Error fetching transcript for {doc_id}: {e}")
+
+                        progress.advance(task)
+            else:
+                # Non-TTY mode: use logger
+                logger.info("Fetching transcripts...")
+                for doc in docs_to_write:
+                    doc_id = doc.get("id")
+                    if not doc_id:
+                        continue
+
+                    try:
+                        transcript = self.client.get_document_transcript(doc_id)
+                        if transcript:
+                            filename = f"transcript_{doc_id[:8]}.json"
+                            with open(transcripts_dir / filename, "w") as f:
+                                json.dump(
+                                    {
+                                        "document_id": doc_id,
+                                        "title": doc.get("title"),
+                                        "transcript": transcript,
+                                    },
+                                    f,
+                                    indent=2,
+                                )
+                            trans_exported += 1
+                    except Exception as e:
+                        # 404 is expected for docs without transcripts
+                        if "404" not in str(e):
+                            errors.append(f"Error fetching transcript for {doc_id}: {e}")
 
             logger.info(f"Fetched {trans_exported} transcripts")
 
