@@ -106,11 +106,12 @@ class MarkdownExporter(BaseExporter):
     def _meeting_to_markdown(self, meeting: Meeting) -> str:
         """Convert a Meeting to Markdown format."""
         lines = []
+        title = meeting.title or "Untitled Meeting"
 
         # YAML frontmatter
         if self.frontmatter:
             lines.append("---")
-            lines.append(f"title: \"{meeting.title.replace('\"', '\\')}\"")
+            lines.append(f"title: \"{title.replace('\"', '\\')}\"")
             if meeting.created_at:
                 lines.append(f"date: {meeting.created_at.isoformat()}")
             if meeting.document.participants:
@@ -124,7 +125,7 @@ class MarkdownExporter(BaseExporter):
             lines.append("")
 
         # Title
-        lines.append(f"# {meeting.title}")
+        lines.append(f"# {title}")
         lines.append("")
 
         # Metadata section
