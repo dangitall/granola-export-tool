@@ -154,7 +154,7 @@ class APIExporter(BaseExporter):
         # Write individual document files
         for doc in all_documents:
             doc_id = doc.get("id", "unknown")
-            title = doc.get("title", "Untitled")
+            title = doc.get("title") or "Untitled"
             safe_title = self._safe_filename(title)
             filename = f"{safe_title}_{doc_id[:8]}.json"
 
