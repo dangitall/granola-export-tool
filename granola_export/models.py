@@ -377,7 +377,7 @@ class Document:
 
         return cls(
             id=doc_id,
-            title=data.get("title", "Untitled Meeting"),
+            title=data.get("title") or "Untitled Meeting",
             created_at=created_at,
             updated_at=updated_at,
             panels=panels,
