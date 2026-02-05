@@ -194,8 +194,8 @@ class APIExporter(Exporter):
         # Write individual document files
         for doc in all_documents:
             doc_id = doc.get("id", "unknown")
-            title = doc.get("title", "Untitled")
-            filename = f"{safe_filename(title)}_{doc_id[:8]}.json"
+            safe_title = safe_filename(doc.get("title") or "Untitled")
+            filename = f"{safe_title}_{doc_id[:8]}.json"
 
             with open(meetings_dir / filename, "w") as f:
                 json.dump(doc, f, indent=2)
