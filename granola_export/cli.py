@@ -558,6 +558,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
     print()
 
     # Run export (logging is configured in main() based on --verbose/--quiet)
+    op_name = "API sync" if args.sync else "API export"
     start = time.monotonic()
     try:
         result = exporter.export()
@@ -570,12 +571,34 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     if not _quiet:
         print()
-        print(c(f"API export completed in {elapsed:.1f}s", Colors.DIM))
+        print(c(f"{op_name} completed in {elapsed:.1f}s", Colors.DIM))
 
-    if result.success:
+    if args.sync:
+        # Load manifest to get sync statistics
+        manifest_path = args.output / "manifest.json"
+        sync_stats = {}
+        if manifest_path.exists():
+            try:
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                    sync_stats = manifest.get("sync_statistics", {})
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        if sync_stats:
+            print_success(f"New meetings: {sync_stats.get('new', 0)}")
+            print_success(f"Updated meetings: {sync_stats.get('updated', 0)}")
+            if not _quiet:
+                print(f"  Unchanged (skipped): {c(str(sync_stats.get('skipped', 0)), Colors.DIM)}")
+            print_success(f"Transcripts fetched: {result.transcripts_exported}")
+        else:
+            print_success(f"Exported {result.documents_exported} documents")
+            print_success(f"Exported {result.transcripts_exported} transcripts")
+    elif result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
-    else:
+
+    if not result.success:
         print_warning(f"Export completed with {len(result.errors)} errors")
         for error in result.errors[:5]:
             print_error(error)
