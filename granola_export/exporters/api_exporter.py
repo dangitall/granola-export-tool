@@ -50,6 +50,7 @@ class APIExporter(Exporter):
         include_transcripts: bool = True,
         include_shared: bool = True,
         workspace_id: Optional[str] = None,
+        sync_mode: bool = False,
     ):
         """
         Initialize the API exporter.
@@ -61,11 +62,13 @@ class APIExporter(Exporter):
             include_transcripts: Whether to fetch transcripts.
             include_shared: Whether to fetch shared documents from folders.
             workspace_id: Optional workspace filter.
+            sync_mode: If True, only download new/changed documents.
         """
         self.output_dir = Path(output_dir)
         self.include_transcripts = include_transcripts
         self.include_shared = include_shared
         self.workspace_id = workspace_id
+        self.sync_mode = sync_mode
 
         if access_token:
             self.client = GranolaAPIClient.from_token(access_token)
@@ -85,6 +88,46 @@ class APIExporter(Exporter):
                 "Check that your Granola token is valid and not expired."
             ) from exc
 
+    def _load_previous_manifest(self) -> dict:
+        """Load the previous export manifest if it exists."""
+        manifest_path = self.output_dir / "manifest.json"
+        if not manifest_path.exists():
+            return {}
+
+        try:
+            with open(manifest_path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load previous manifest: {e}")
+            return {}
+
+    def _is_document_changed(
+        self, doc: dict, previous_docs: dict
+    ) -> tuple[bool, str]:
+        """
+        Check if a document has changed since the last export.
+
+        Returns:
+            Tuple of (is_changed, reason) where reason is 'new', 'updated', or 'unchanged'.
+        """
+        doc_id = doc.get("id")
+        if not doc_id or doc_id not in previous_docs:
+            return True, "new"
+
+        prev_info = previous_docs[doc_id]
+        doc_updated = doc.get("updated_at") or doc.get("updatedAt")
+        prev_updated = prev_info.get("updated_at")
+
+        # If we can't compare timestamps, assume changed
+        if not doc_updated or not prev_updated:
+            return True, "updated"
+
+        # Compare timestamps
+        if doc_updated > prev_updated:
+            return True, "updated"
+
+        return False, "unchanged"
+
     def export(self) -> ExportResult:
         """
         Export all data from the API.
@@ -94,6 +137,17 @@ class APIExporter(Exporter):
         """
         self._prepare_output_dir()
         errors = []
+
+        # Load previous manifest for sync mode
+        previous_manifest = {}
+        previous_docs = {}
+        if self.sync_mode:
+            previous_manifest = self._load_previous_manifest()
+            previous_docs = previous_manifest.get("documents", {})
+            if previous_docs:
+                logger.info(f"Sync mode: found {len(previous_docs)} previously exported documents")
+            else:
+                logger.info("Sync mode: no previous export found, doing full export")
 
         # Create subdirectories
         meetings_dir = self.output_dir / "meetings"
@@ -139,7 +193,6 @@ class APIExporter(Exporter):
 
         # Fetch documents
         logger.info("Fetching documents...")
-        docs_exported = 0
         all_documents = []
         document_ids_seen = set()
 
@@ -151,9 +204,8 @@ class APIExporter(Exporter):
                 if doc_id:
                     document_ids_seen.add(doc_id)
                     all_documents.append(doc)
-                    docs_exported += 1
 
-            logger.info(f"Fetched {docs_exported} owned documents")
+            logger.info(f"Found {len(all_documents)} owned documents")
         except urllib.error.HTTPError as e:
             self._check_auth_error(e)
             logger.error(f"HTTP {e.code} fetching documents: {e}")
@@ -181,7 +233,6 @@ class APIExporter(Exporter):
                     for doc in shared_docs:
                         doc["_shared"] = True
                         all_documents.append(doc)
-                        docs_exported += 1
                     logger.info(f"Fetched {len(shared_docs)} shared documents")
                 except urllib.error.HTTPError as e:
                     self._check_auth_error(e)
@@ -191,8 +242,33 @@ class APIExporter(Exporter):
                     logger.error(f"Network error fetching shared documents: {e.reason}")
                     errors.append(f"Network error fetching shared documents: {e.reason}")
 
-        # Write individual document files
+        # Determine which documents need to be written (sync mode filtering)
+        docs_to_write = []
+        docs_new = 0
+        docs_updated = 0
+        docs_skipped = 0
+
         for doc in all_documents:
+            if self.sync_mode:
+                changed, reason = self._is_document_changed(doc, previous_docs)
+                if changed:
+                    docs_to_write.append(doc)
+                    if reason == "new":
+                        docs_new += 1
+                    else:
+                        docs_updated += 1
+                else:
+                    docs_skipped += 1
+            else:
+                docs_to_write.append(doc)
+
+        if self.sync_mode:
+            logger.info(
+                f"Sync: {docs_new} new, {docs_updated} updated, {docs_skipped} unchanged"
+            )
+
+        # Write individual document files (only changed ones in sync mode)
+        for doc in docs_to_write:
             doc_id = doc.get("id", "unknown")
             safe_title = safe_filename(doc.get("title") or "Untitled")
             filename = f"{safe_title}_{doc_id[:8]}.json"
@@ -200,12 +276,12 @@ class APIExporter(Exporter):
             with open(meetings_dir / filename, "w") as f:
                 json.dump(doc, f, indent=2)
 
-        # Fetch transcripts
+        # Fetch transcripts (only for documents we're writing)
         trans_exported = 0
         if self.include_transcripts:
             logger.info("Fetching transcripts...")
 
-            for doc in all_documents:
+            for doc in docs_to_write:
                 doc_id = doc.get("id")
                 if not doc_id:
                     continue
@@ -252,7 +328,7 @@ class APIExporter(Exporter):
             logger.error(f"Network error fetching people: {e.reason}")
             errors.append(f"Network error fetching people: {e.reason}")
 
-        # Write combined documents file
+        # Write combined documents file (all documents, not just changed)
         with open(self.output_dir / "all_meetings.json", "w") as f:
             json.dump(
                 {
@@ -265,13 +341,25 @@ class APIExporter(Exporter):
                 indent=2,
             )
 
-        # Write manifest
+        # Build document tracking for manifest
+        documents_manifest = {}
+        for doc in all_documents:
+            doc_id = doc.get("id")
+            if doc_id:
+                documents_manifest[doc_id] = {
+                    "updated_at": doc.get("updated_at") or doc.get("updatedAt"),
+                    "title": doc.get("title"),
+                }
+
+        # Write manifest with document tracking
         manifest = {
             "export_format": "api",
             "export_date": datetime.now().isoformat(),
             "source": "Granola API",
+            "sync_enabled": self.sync_mode,
             "statistics": {
-                "documents": docs_exported,
+                "total_documents": len(all_documents),
+                "documents_written": len(docs_to_write),
                 "transcripts": trans_exported,
                 "workspaces": len(workspaces),
                 "folders": len(folders),
@@ -281,8 +369,16 @@ class APIExporter(Exporter):
                 "include_shared": self.include_shared,
                 "workspace_id": self.workspace_id,
             },
+            "documents": documents_manifest,
             "errors": errors,
         }
+
+        if self.sync_mode:
+            manifest["sync_statistics"] = {
+                "new": docs_new,
+                "updated": docs_updated,
+                "skipped": docs_skipped,
+            }
 
         with open(self.output_dir / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=2)
@@ -290,7 +386,7 @@ class APIExporter(Exporter):
         return ExportResult(
             success=len(errors) == 0,
             output_path=str(self.output_dir),
-            documents_exported=docs_exported,
+            documents_exported=len(docs_to_write),
             transcripts_exported=trans_exported,
             format="api",
             errors=errors,
