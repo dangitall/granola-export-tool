@@ -95,8 +95,10 @@ def format_date(dt: Optional[datetime]) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def truncate(text: str, max_length: int = 60) -> str:
+def truncate(text: str | None, max_length: int = 60) -> str:
     """Truncate text with ellipsis."""
+    if text is None:
+        return ""
     if len(text) <= max_length:
         return text
     return text[: max_length - 3] + "..."
