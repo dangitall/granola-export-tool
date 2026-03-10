@@ -29,8 +29,6 @@ from .cache import GranolaCache, get_default_cache_path
 from .exporters import get_exporter, AuthenticationError
 from .search import MeetingSearcher, SearchQuery, quick_search
 
-logger = logging.getLogger(__name__)
-
 
 # ANSI color codes for terminal output
 class Colors:
@@ -57,6 +55,7 @@ def supports_color() -> bool:
 
 
 _color_override: Optional[bool] = None
+_quiet: bool = False
 
 
 def use_color() -> bool:
@@ -74,7 +73,9 @@ def c(text: str, color: str) -> str:
 
 
 def print_header(text: str) -> None:
-    """Print a styled header."""
+    """Print a styled header. Suppressed by --quiet."""
+    if _quiet:
+        return
     print()
     print(c(f"{'─' * 60}", Colors.DIM))
     print(c(f"  {text}", Colors.BOLD + Colors.CYAN))
@@ -83,17 +84,19 @@ def print_header(text: str) -> None:
 
 
 def print_error(text: str) -> None:
-    """Print an error message."""
+    """Print an error message. Never suppressed."""
     print(c(f"Error: {text}", Colors.RED), file=sys.stderr)
 
 
 def print_success(text: str) -> None:
-    """Print a success message."""
+    """Print a success message. Suppressed by --quiet."""
+    if _quiet:
+        return
     print(c(f"✓ {text}", Colors.GREEN))
 
 
 def print_warning(text: str) -> None:
-    """Print a warning message."""
+    """Print a warning message. Never suppressed."""
     print(c(f"! {text}", Colors.YELLOW))
 
 
@@ -112,7 +115,9 @@ def truncate(text: str, max_length: int = 60) -> str:
 
 
 def print_hint(text: str) -> None:
-    """Print a hint/help message."""
+    """Print a hint/help message. Suppressed by --quiet."""
+    if _quiet:
+        return
     print(c(f"  → {text}", Colors.DIM))
 
 
@@ -145,7 +150,7 @@ class Spinner:
 
     def __enter__(self) -> "Spinner":
         self._start = time.monotonic()
-        if not sys.stdout.isatty():
+        if _quiet or not sys.stdout.isatty():
             return self
         self._running = True
         self._thread = threading.Thread(target=self._spin, daemon=True)
@@ -160,7 +165,7 @@ class Spinner:
         if sys.stdout.isatty():
             sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
             sys.stdout.flush()
-        if self._show_elapsed:
+        if self._show_elapsed and not _quiet:
             print(c(f"{self.message} completed in {elapsed:.1f}s", Colors.DIM))
 
     def _spin(self) -> None:
@@ -221,11 +226,13 @@ def cmd_export(args: argparse.Namespace) -> int:
     with Spinner(f"Exporting to {args.format.upper()}", show_elapsed=True):
         result = exporter.export()
 
-    print()
+    if not _quiet:
+        print()
     if result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
-        print(f"\n📁 Output: {c(str(result.output_path), Colors.CYAN)}")
+        if not _quiet:
+            print(f"\n📁 Output: {c(str(result.output_path), Colors.CYAN)}")
     else:
         print_warning(f"Export completed with {len(result.errors)} errors")
         for error in result.errors[:5]:
@@ -519,8 +526,9 @@ def cmd_api_export(args: argparse.Namespace) -> int:
     else:
         print_success("Using provided API token")
 
-    print(f"📁 Output: {c(str(args.output), Colors.CYAN)}")
-    print()
+    if not _quiet:
+        print(f"📁 Output: {c(str(args.output), Colors.CYAN)}")
+        print()
 
     # Create exporter
     try:
@@ -556,8 +564,10 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         return 1
     elapsed = time.monotonic() - start
 
-    print()
-    print(c(f"API export completed in {elapsed:.1f}s", Colors.DIM))
+    if not _quiet:
+        print()
+        print(c(f"API export completed in {elapsed:.1f}s", Colors.DIM))
+
     if result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
@@ -566,18 +576,20 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         for error in result.errors[:5]:
             print_error(error)
         if len(result.errors) > 5:
-            print(f"  ... and {len(result.errors) - 5} more errors")
+            print(f"  ... and {len(result.errors) - 5} more errors",
+                  file=sys.stderr)
 
-    # Summary
-    print()
-    print(c("📦 Export Contents:", Colors.BOLD))
-    print(f"  {c('all_meetings.json', Colors.CYAN)}   Combined export")
-    print(f"  {c('meetings/', Colors.CYAN)}           Individual meetings")
-    print(f"  {c('transcripts/', Colors.CYAN)}        Transcript data")
-    print(f"  {c('workspaces.json', Colors.CYAN)}     Workspace info")
-    print(f"  {c('folders.json', Colors.CYAN)}        Folder structure")
-    print(f"  {c('people.json', Colors.CYAN)}         Contacts")
-    print(f"  {c('manifest.json', Colors.CYAN)}       Export metadata")
+    if not _quiet:
+        # Summary
+        print()
+        print(c("📦 Export Contents:", Colors.BOLD))
+        print(f"  {c('all_meetings.json', Colors.CYAN)}   Combined export")
+        print(f"  {c('meetings/', Colors.CYAN)}           Individual meetings")
+        print(f"  {c('transcripts/', Colors.CYAN)}        Transcript data")
+        print(f"  {c('workspaces.json', Colors.CYAN)}     Workspace info")
+        print(f"  {c('folders.json', Colors.CYAN)}        Folder structure")
+        print(f"  {c('people.json', Colors.CYAN)}         Contacts")
+        print(f"  {c('manifest.json', Colors.CYAN)}       Export metadata")
 
     return 0 if result.success else 1
 
@@ -846,12 +858,14 @@ def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
 
-    # Reset color override on each invocation so repeated main() calls
+    # Reset state on each invocation so repeated main() calls
     # (e.g. in tests) don't leak state from a previous run.
-    global _color_override
+    global _color_override, _quiet
     _color_override = False if args.no_color else None
+    _quiet = args.quiet
 
-    # Configure logging based on verbosity flags
+    # Configure logging on the package logger (not root) so we don't
+    # clobber logging set up by test harnesses or embedding applications.
     if args.verbose:
         log_level = logging.DEBUG
         log_format = "  %(name)s: %(message)s"
@@ -861,7 +875,12 @@ def main() -> int:
     else:
         log_level = logging.INFO
         log_format = "  %(message)s"
-    logging.basicConfig(level=log_level, format=log_format, force=True)
+    pkg_logger = logging.getLogger("granola_export")
+    pkg_logger.setLevel(log_level)
+    if not pkg_logger.handlers:
+        pkg_logger.addHandler(logging.StreamHandler())
+    for h in pkg_logger.handlers:
+        h.setFormatter(logging.Formatter(log_format))
 
     commands = {
         "export": cmd_export,
