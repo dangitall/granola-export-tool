@@ -19,7 +19,6 @@ import re
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -127,14 +126,22 @@ def pad_right(text: str, width: int) -> str:
 
 
 class Spinner:
-    """Simple terminal spinner for long operations."""
+    """Simple terminal spinner for long operations.
 
-    def __init__(self, message: str = "Processing") -> None:
+    Args:
+        message: Text shown next to the spinner.
+        show_elapsed: If True, print elapsed time when the spinner finishes.
+    """
+
+    def __init__(self, message: str = "Processing", show_elapsed: bool = False) -> None:
         self.message = message
+        self._show_elapsed = show_elapsed
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._start: float = 0
 
     def __enter__(self) -> "Spinner":
+        self._start = time.monotonic()
         if not sys.stdout.isatty():
             return self
         self._running = True
@@ -146,9 +153,12 @@ class Spinner:
         self._running = False
         if self._thread:
             self._thread.join(timeout=0.5)
+        elapsed = time.monotonic() - self._start
         if sys.stdout.isatty():
             sys.stdout.write("\r" + " " * (len(self.message) + 10) + "\r")
             sys.stdout.flush()
+        if self._show_elapsed:
+            print(c(f"{self.message} completed in {elapsed:.1f}s", Colors.DIM))
 
     def _spin(self) -> None:
         frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -159,15 +169,6 @@ class Spinner:
             sys.stdout.flush()
             idx += 1
             time.sleep(0.08)
-
-
-@contextmanager
-def timed_operation(operation_name: str):
-    """Context manager that reports operation duration."""
-    start = time.monotonic()
-    yield
-    elapsed = time.monotonic() - start
-    print(c(f"{operation_name} completed in {elapsed:.1f}s", Colors.DIM))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,9 +215,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         include_raw=args.include_raw,
     )
 
-    with Spinner(f"Exporting to {args.format.upper()}"):
-        with timed_operation("Export"):
-            result = exporter.export()
+    with Spinner(f"Exporting to {args.format.upper()}", show_elapsed=True):
+        result = exporter.export()
 
     print()
     if result.success:
@@ -549,16 +549,18 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         format="  %(message)s",
     )
 
+    start = time.monotonic()
     try:
-        with timed_operation("API export"):
-            result = exporter.export()
+        result = exporter.export()
     except AuthenticationError as e:
         print()
         print_error(str(e))
         print_hint("Try logging out and back in to Granola to refresh your token")
         return 1
+    elapsed = time.monotonic() - start
 
     print()
+    print(c(f"API export completed in {elapsed:.1f}s", Colors.DIM))
     if result.success:
         print_success(f"Exported {result.documents_exported} documents")
         print_success(f"Exported {result.transcripts_exported} transcripts")
