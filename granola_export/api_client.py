@@ -208,7 +208,7 @@ class GranolaAPIClient:
                 raise
 
             except urllib.error.URLError as e:
-                # Retry on network errors (includes SSL timeouts)
+                # Retry on network errors
                 if attempt < max_retries:
                     delay = 2 ** attempt  # 1s, 2s, 4s
                     logger.warning(
@@ -221,6 +221,22 @@ class GranolaAPIClient:
 
                 logger.error(f"Network error after {max_retries} retries: {e.reason}")
                 raise
+
+            except (TimeoutError, OSError) as e:
+                # TimeoutError is not a subclass of URLError, but can be
+                # raised by socket operations during HTTP requests
+                if attempt < max_retries:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        f"Timeout/connection error: {e}, retrying in {delay}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                    last_exception = e
+                    continue
+
+                logger.error(f"Timeout/connection error after {max_retries} retries: {e}")
+                raise urllib.error.URLError(str(e)) from e
 
         # Should not reach here, but guard against it
         if last_exception:
@@ -402,11 +418,14 @@ class GranolaAPIClient:
         Returns:
             List of folder dictionaries with document IDs.
         """
-        # Try v2 first, fall back to v1
+        # Try v2 first, fall back to v1 only if the endpoint doesn't exist
         try:
             response = self._request("/v2/get-document-lists", data={})
-        except urllib.error.HTTPError:
-            response = self._request("/v1/get-document-lists", data={})
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 405):
+                response = self._request("/v1/get-document-lists", data={})
+            else:
+                raise
 
         if isinstance(response, list):
             return response
