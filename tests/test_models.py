@@ -100,6 +100,18 @@ class TestTranscript:
         assert transcript.duration_seconds == 2
         assert transcript.word_count == 2
 
+    def test_duration_seconds_with_iso_timestamps(self):
+        """duration_seconds should be relative even with absolute ISO timestamps."""
+        data = {
+            "segments": [
+                {"text": "Hello", "startTime": "2024-06-15T10:00:00Z", "endTime": "2024-06-15T10:00:03Z"},
+                {"text": "World", "startTime": "2024-06-15T10:00:03Z", "endTime": "2024-06-15T10:00:10Z"},
+            ],
+        }
+        transcript = Transcript.from_dict("doc-iso", data)
+        # Total duration should be 10 seconds, not a billion-second epoch value
+        assert abs(transcript.duration_seconds - 10.0) < 0.01
+
     def test_from_dict_with_text(self):
         data = {
             "text": "This is the full transcript text.",

@@ -131,10 +131,16 @@ class Transcript:
 
     @property
     def duration_seconds(self) -> float:
-        """Calculate total duration from segments."""
+        """Calculate total duration from segments.
+
+        Works correctly whether timestamps are relative (seconds from
+        start of recording) or absolute (epoch seconds from ISO parsing).
+        """
         if not self.segments:
             return 0
-        return max(seg.end_time for seg in self.segments)
+        end = max(seg.end_time for seg in self.segments)
+        start = min(seg.start_time for seg in self.segments)
+        return end - start
 
     @property
     def word_count(self) -> int:
