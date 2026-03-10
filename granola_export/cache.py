@@ -19,7 +19,9 @@ from .models import (
     Calendar,
     Folder,
 )
-from .paths import get_default_cache_path
+# Re-exported for backward compatibility: cli.py and external consumers
+# import get_default_cache_path from this module.
+from .paths import get_default_cache_path  # noqa: F401
 
 
 class GranolaCache:
