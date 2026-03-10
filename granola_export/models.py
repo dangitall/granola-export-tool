@@ -33,6 +33,20 @@ class Person:
         )
 
 
+def _parse_timestamp_string(value: str) -> float:
+    """
+    Best-effort parse of a timestamp string into epoch seconds.
+
+    Handles ISO 8601 strings (e.g. from the Granola API).  Returns 0
+    on failure so callers never crash on unexpected formats.
+    """
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return 0
+
+
 @dataclass
 class TranscriptSegment:
     """A single segment of a transcript with timing information."""
@@ -50,11 +64,12 @@ class TranscriptSegment:
         start_time = data.get("startTime", data.get("start", data.get("start_timestamp", 0)))
         end_time = data.get("endTime", data.get("end", data.get("end_timestamp", 0)))
 
-        # Convert ISO timestamp strings to seconds if needed
+        # Convert ISO timestamp strings to epoch seconds so timing info
+        # is preserved for duration calculations and display.
         if isinstance(start_time, str):
-            start_time = 0  # We'd need to parse ISO, but relative ordering matters more
+            start_time = _parse_timestamp_string(start_time)
         if isinstance(end_time, str):
-            end_time = 0
+            end_time = _parse_timestamp_string(end_time)
 
         return cls(
             text=data.get("text", ""),
@@ -76,7 +91,7 @@ class Transcript:
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_dict(cls, document_id: str, data: any) -> "Transcript":
+    def from_dict(cls, document_id: str, data: Any) -> "Transcript":
         """Create a Transcript from a dictionary or list of segments."""
         segments = []
         raw_data = {}
@@ -116,10 +131,16 @@ class Transcript:
 
     @property
     def duration_seconds(self) -> float:
-        """Calculate total duration from segments."""
+        """Calculate total duration from segments.
+
+        Works correctly whether timestamps are relative (seconds from
+        start of recording) or absolute (epoch seconds from ISO parsing).
+        """
         if not self.segments:
             return 0
-        return max(seg.end_time for seg in self.segments)
+        end = max(seg.end_time for seg in self.segments)
+        start = min(seg.start_time for seg in self.segments)
+        return end - start
 
     @property
     def word_count(self) -> int:
