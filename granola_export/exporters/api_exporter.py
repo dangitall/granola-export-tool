@@ -226,12 +226,15 @@ class APIExporter(Exporter):
                             )
                         trans_exported += 1
                 except urllib.error.HTTPError as e:
+                    self._check_auth_error(e)
                     # get_document_transcript returns None on 404 (no transcript),
                     # so a 404 here shouldn't happen — but guard against it.
                     if e.code != 404:
-                        errors.append(f"Error fetching transcript for {doc_id}: {e}")
-                except Exception as e:
-                    errors.append(f"Error fetching transcript for {doc_id}: {e}")
+                        logger.error(f"HTTP {e.code} fetching transcript for {doc_id}")
+                        errors.append(f"Error fetching transcript for {doc_id}: HTTP {e.code}")
+                except urllib.error.URLError as e:
+                    logger.error(f"Network error fetching transcript for {doc_id}: {e.reason}")
+                    errors.append(f"Network error fetching transcript for {doc_id}: {e.reason}")
 
             logger.info(f"Fetched {trans_exported} transcripts")
 
