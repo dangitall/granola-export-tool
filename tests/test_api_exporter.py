@@ -143,6 +143,23 @@ class TestRecoverableErrors:
         assert not result.success
         assert any("transcript" in e for e in result.errors)
 
+    @patch("granola_export.exporters.api_exporter.time.sleep")
+    def test_transcript_bail_out_after_consecutive_failures(self, mock_sleep, exporter):
+        """Stop fetching transcripts after 5 consecutive failures."""
+        docs = [{"id": f"doc-{i}", "title": f"Meeting {i}"} for i in range(10)]
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter(docs)
+        exporter.client.get_document_transcript.side_effect = _make_http_error(500)
+        exporter.client.get_people.return_value = {}
+
+        result = exporter.export()
+
+        assert not result.success
+        # Should have bailed after 5 consecutive failures, not tried all 10
+        assert exporter.client.get_document_transcript.call_count == 5
+        assert any("skipped" in e.lower() for e in result.errors)
+
 
 class TestSuccessfulExport:
     """Verify a successful export writes the expected files."""

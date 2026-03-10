@@ -270,6 +270,9 @@ class GranolaAPIClient:
         """
         Iterate through all documents with automatic pagination.
 
+        Errors on individual pages are logged and stop pagination
+        (yielding whatever was fetched so far) rather than raising.
+
         Args:
             workspace_id: Optional workspace filter.
             limit: Batch size.
@@ -278,13 +281,29 @@ class GranolaAPIClient:
             Document dictionaries.
         """
         offset = 0
+        consecutive_errors = 0
 
         while True:
-            response = self.get_documents(
-                workspace_id=workspace_id,
-                limit=limit,
-                offset=offset,
-            )
+            try:
+                response = self.get_documents(
+                    workspace_id=workspace_id,
+                    limit=limit,
+                    offset=offset,
+                )
+                consecutive_errors = 0
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                code = getattr(e, "code", None)
+                # Auth errors should still propagate
+                if code in (401, 403):
+                    raise
+                consecutive_errors += 1
+                logger.error(f"Error fetching documents at offset {offset}: {e}")
+                if consecutive_errors >= 2:
+                    logger.error("Multiple consecutive page failures, stopping pagination")
+                    break
+                # Skip this page and try the next
+                offset += limit
+                continue
 
             docs = response.get("docs", [])
             if not docs:

@@ -151,3 +151,40 @@ class TestRetryLogic:
             client._request("/test", max_retries=2)
 
         assert mock_urlopen.call_count == 3  # initial + 2 retries
+
+
+class TestPaginationResilience:
+    """Tests for get_all_documents error handling during pagination."""
+
+    def test_500_mid_pagination_yields_partial_results(self, client):
+        """A 500 during pagination should yield docs fetched so far."""
+        page1 = {"docs": [{"id": "d1"}, {"id": "d2"}]}
+        page2_error = _make_http_error(500)
+        # After the error, pagination skips ahead; second consecutive error stops it
+        page3_error = _make_http_error(500)
+
+        with patch.object(client, "get_documents") as mock_get:
+            mock_get.side_effect = [page1, page2_error, page3_error]
+            docs = list(client.get_all_documents(limit=2))
+
+        assert len(docs) == 2
+        assert docs[0]["id"] == "d1"
+
+    def test_two_consecutive_page_errors_stops(self, client):
+        """Two consecutive page failures should stop pagination."""
+        with patch.object(client, "get_documents") as mock_get:
+            mock_get.side_effect = [_make_http_error(500), _make_http_error(500)]
+            docs = list(client.get_all_documents(limit=2))
+
+        assert len(docs) == 0
+
+    def test_auth_error_during_pagination_raises(self, client):
+        """401/403 during pagination should still propagate."""
+        page1 = {"docs": [{"id": "d1"}, {"id": "d2"}]}
+
+        with patch.object(client, "get_documents") as mock_get:
+            mock_get.side_effect = [page1, _make_http_error(401)]
+            with pytest.raises(urllib.error.HTTPError) as exc_info:
+                list(client.get_all_documents(limit=2))
+
+        assert exc_info.value.code == 401

@@ -7,6 +7,7 @@ Useful for shared documents and team-wide exports.
 
 import json
 import logging
+import time
 import urllib.error
 from datetime import datetime
 from pathlib import Path
@@ -295,14 +296,20 @@ class APIExporter(Exporter):
         trans_exported = 0
         if self.include_transcripts:
             logger.info("Fetching transcripts...")
+            consecutive_failures = 0
 
-            for doc in docs_to_write:
+            for i, doc in enumerate(docs_to_write):
                 doc_id = doc.get("id")
                 if not doc_id:
                     continue
 
+                # Brief pause between requests to avoid hammering the API
+                if i > 0:
+                    time.sleep(0.2)
+
                 try:
                     transcript = self.client.get_document_transcript(doc_id)
+                    consecutive_failures = 0
                     if transcript:
                         filename = f"transcript_{doc_id[:8]}.json"
                         with open(transcripts_dir / filename, "w") as f:
@@ -318,14 +325,26 @@ class APIExporter(Exporter):
                         trans_exported += 1
                 except urllib.error.HTTPError as e:
                     self._check_auth_error(e)
-                    # get_document_transcript returns None on 404 (no transcript),
-                    # so a 404 here shouldn't happen — but guard against it.
                     if e.code != 404:
+                        consecutive_failures += 1
                         logger.error(f"HTTP {e.code} fetching transcript for {doc_id}")
                         errors.append(f"Error fetching transcript for {doc_id}: HTTP {e.code}")
                 except urllib.error.URLError as e:
+                    consecutive_failures += 1
                     logger.error(f"Network error fetching transcript for {doc_id}: {e.reason}")
                     errors.append(f"Network error fetching transcript for {doc_id}: {e.reason}")
+
+                if consecutive_failures >= 5:
+                    remaining = len(docs_to_write) - i - 1
+                    logger.error(
+                        f"Too many consecutive transcript failures, "
+                        f"skipping remaining {remaining} transcripts"
+                    )
+                    errors.append(
+                        f"Stopped fetching transcripts after {consecutive_failures} "
+                        f"consecutive failures ({remaining} skipped)"
+                    )
+                    break
 
             logger.info(f"Fetched {trans_exported} transcripts")
 
