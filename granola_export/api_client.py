@@ -411,30 +411,77 @@ class GranolaAPIClient:
             return response
         return response.get("workspaces", [])
 
-    def get_document_lists(self) -> list[dict]:
+    def get_document_list(self, list_id: str) -> Optional[dict]:
+        """
+        Fetch a single document list (folder) by ID.
+
+        This is the reliable endpoint — use this instead of the bulk
+        get_document_lists which frequently 500s.
+
+        Args:
+            list_id: The folder UUID.
+
+        Returns:
+            Folder dictionary, or None if not found.
+        """
+        try:
+            return self._request(
+                "/v1/get-document-list", data={"list_id": list_id}
+            )
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    def get_document_lists(
+        self, known_ids: Optional[list[str]] = None
+    ) -> list[dict]:
         """
         Fetch all document lists (folders).
+
+        Tries the bulk endpoint first.  If it fails and known_ids are
+        provided, falls back to fetching each folder individually via
+        the reliable singular endpoint.
+
+        Args:
+            known_ids: Optional list of folder IDs from a previous export
+                      to use as fallback when the bulk endpoint fails.
 
         Returns:
             List of folder dictionaries with document IDs.
         """
-        # Try v2 first, fall back to v1 only if the endpoint doesn't exist
+        # Try bulk endpoint first
         try:
-            response = self._request("/v2/get-document-lists", data={})
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 405):
-                response = self._request("/v1/get-document-lists", data={})
-            else:
-                raise
+            response = self._request(
+                "/v2/get-document-lists", data={}, max_retries=1,
+            )
+            if isinstance(response, list):
+                return response
+            return (
+                response.get("lists")
+                or response.get("document_lists")
+                or []
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            logger.warning(f"Bulk folder endpoint failed: {e}")
 
-        if isinstance(response, list):
-            return response
+        # Fall back to fetching individual folders if we have IDs
+        if not known_ids:
+            logger.warning("No known folder IDs for fallback — skipping folders")
+            return []
 
-        return (
-            response.get("lists")
-            or response.get("document_lists")
-            or []
+        logger.info(
+            f"Falling back to individual folder fetches ({len(known_ids)} folders)"
         )
+        folders = []
+        for list_id in known_ids:
+            try:
+                folder = self.get_document_list(list_id)
+                if folder:
+                    folders.append(folder)
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                logger.warning(f"Failed to fetch folder {list_id}: {e}")
+        return folders
 
     # -------------------------------------------------------------------------
     # Other Endpoints

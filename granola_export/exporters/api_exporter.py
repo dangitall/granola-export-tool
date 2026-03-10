@@ -190,12 +190,18 @@ class APIExporter(Exporter):
             errors.append(f"Network error fetching workspaces: {e.reason}")
             workspaces = []
 
-        # Fetch folders
+        # Fetch folders — pass known IDs from previous manifest so the
+        # client can fall back to the reliable singular endpoint when the
+        # bulk endpoint (which frequently 500s) fails.
         logger.info("Fetching folders...")
+        known_folder_ids = list(previous_manifest.get("folder_ids", []))
         try:
-            folders = self.client.get_document_lists()
-            with open(self.output_dir / "folders.json", "w") as f:
-                json.dump(folders, f, indent=2)
+            folders = self.client.get_document_lists(
+                known_ids=known_folder_ids or None,
+            )
+            if folders:
+                with open(self.output_dir / "folders.json", "w") as f:
+                    json.dump(folders, f, indent=2)
             logger.info(f"Found {len(folders)} folders")
         except urllib.error.HTTPError as e:
             self._check_auth_error(e)
@@ -404,6 +410,7 @@ class APIExporter(Exporter):
                 "workspace_id": self.workspace_id,
             },
             "documents": documents_manifest,
+            "folder_ids": [f["id"] for f in folders if f.get("id")],
             "errors": errors,
         }
 
