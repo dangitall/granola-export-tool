@@ -196,8 +196,11 @@ class APIExporter(Exporter):
         # The local cache picks up new folders via websocket events.
         logger.info("Fetching folders...")
         manifest_ids = set(previous_manifest.get("folder_ids", []))
+        deleted_folder_ids = set(previous_manifest.get("deleted_folder_ids", []))
         local_cache_ids = set(get_folder_ids_from_local_cache())
-        known_folder_ids = list(manifest_ids | local_cache_ids)
+        known_folder_ids = list(
+            (manifest_ids | local_cache_ids) - deleted_folder_ids
+        )
         try:
             folders = self.client.get_document_lists(
                 known_ids=known_folder_ids or None,
@@ -205,6 +208,10 @@ class APIExporter(Exporter):
             if folders:
                 with open(self.output_dir / "folders.json", "w") as f:
                     json.dump(folders, f, indent=2)
+            # Track which IDs came back as 404 (deleted/gone)
+            fetched_ids = {f["id"] for f in folders if f.get("id")}
+            newly_deleted = set(known_folder_ids) - fetched_ids
+            deleted_folder_ids = deleted_folder_ids | newly_deleted
             logger.info(f"Found {len(folders)} folders")
         except urllib.error.HTTPError as e:
             self._check_auth_error(e)
@@ -414,6 +421,7 @@ class APIExporter(Exporter):
             },
             "documents": documents_manifest,
             "folder_ids": [f["id"] for f in folders if f.get("id")],
+            "deleted_folder_ids": sorted(deleted_folder_ids),
             "errors": errors,
         }
 
