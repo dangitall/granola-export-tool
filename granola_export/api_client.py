@@ -374,6 +374,9 @@ class GranolaAPIClient:
         try:
             self.get_workspaces()
             return True
-        except Exception as e:
-            logger.error(f"Connection check failed: {e}")
+        except urllib.error.HTTPError as e:
+            logger.error(f"Connection check failed: HTTP {e.code}")
+            return False
+        except urllib.error.URLError as e:
+            logger.error(f"Connection check failed: {e.reason}")
             return False

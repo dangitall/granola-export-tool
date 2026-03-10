@@ -26,7 +26,7 @@ from typing import Optional
 
 from . import __version__
 from .cache import GranolaCache, get_default_cache_path
-from .exporters import get_exporter
+from .exporters import get_exporter, AuthenticationError
 from .search import MeetingSearcher, SearchQuery, quick_search
 
 
@@ -549,8 +549,14 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         format="  %(message)s",
     )
 
-    with timed_operation("API export"):
-        result = exporter.export()
+    try:
+        with timed_operation("API export"):
+            result = exporter.export()
+    except AuthenticationError as e:
+        print()
+        print_error(str(e))
+        print_hint("Try logging out and back in to Granola to refresh your token")
+        return 1
 
     print()
     if result.success:

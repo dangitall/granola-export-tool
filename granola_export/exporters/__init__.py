@@ -9,7 +9,7 @@ from .json_exporter import JSONExporter
 from .markdown_exporter import MarkdownExporter
 from .csv_exporter import CSVExporter
 from .html_exporter import HTMLExporter
-from .api_exporter import APIExporter
+from .api_exporter import APIExporter, APIExportError, AuthenticationError
 
 __all__ = [
     "Exporter",
@@ -20,6 +20,8 @@ __all__ = [
     "CSVExporter",
     "HTMLExporter",
     "APIExporter",
+    "APIExportError",
+    "AuthenticationError",
 ]
 
 
