@@ -442,9 +442,9 @@ def cmd_show(args: argparse.Namespace) -> int:
     if len(matches) > 1:
         print_error(f"Ambiguous ID prefix '{args.meeting_id}' matches {len(matches)} meetings:")
         for m in matches[:10]:
-            print(f"  {m.id[:12]}  {truncate(m.title, 50)}")
+            print(f"  {m.id[:12]}  {truncate(m.title, 50)}", file=sys.stderr)
         if len(matches) > 10:
-            print(f"  ... and {len(matches) - 10} more")
+            print(f"  ... and {len(matches) - 10} more", file=sys.stderr)
         print_hint("Provide more characters to narrow the match")
         return 1
 
@@ -829,11 +829,10 @@ def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
 
-    # Handle --no-color flag via module-level override so every call to
-    # use_color() sees the change without relying on import-time globals.
+    # Reset color override on each invocation so repeated main() calls
+    # (e.g. in tests) don't leak state from a previous run.
     global _color_override
-    if args.no_color:
-        _color_override = False
+    _color_override = False if args.no_color else None
 
     commands = {
         "export": cmd_export,
