@@ -54,12 +54,19 @@ def supports_color() -> bool:
     return sys.stdout.isatty()
 
 
-USE_COLOR = supports_color()
+_color_override: Optional[bool] = None
+
+
+def use_color() -> bool:
+    """Check whether color output is enabled, respecting --no-color."""
+    if _color_override is not None:
+        return _color_override
+    return supports_color()
 
 
 def c(text: str, color: str) -> str:
     """Colorize text if colors are supported."""
-    if USE_COLOR:
+    if use_color():
         return f"{color}{text}{Colors.RESET}"
     return text
 
@@ -417,16 +424,31 @@ def cmd_show(args: argparse.Namespace) -> int:
         print_error(str(e))
         return 1
 
-    # Find the meeting
-    meeting = None
+    # Find the meeting — collect all prefix matches so we can detect
+    # ambiguity instead of silently returning the first hit.
+    matches = []
     for m in cache.meetings():
-        if m.id == args.meeting_id or m.id.startswith(args.meeting_id):
-            meeting = m
+        if m.id == args.meeting_id:
+            # Exact match — use it immediately, no ambiguity possible.
+            matches = [m]
             break
+        if m.id.startswith(args.meeting_id):
+            matches.append(m)
 
-    if not meeting:
+    if not matches:
         print_error(f"Meeting not found: {args.meeting_id}")
         return 1
+
+    if len(matches) > 1:
+        print_error(f"Ambiguous ID prefix '{args.meeting_id}' matches {len(matches)} meetings:")
+        for m in matches[:10]:
+            print(f"  {m.id[:12]}  {truncate(m.title, 50)}")
+        if len(matches) > 10:
+            print(f"  ... and {len(matches) - 10} more")
+        print_hint("Provide more characters to narrow the match")
+        return 1
+
+    meeting = matches[0]
 
     print_header(meeting.title)
 
@@ -807,29 +829,30 @@ def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
 
-    # Handle --no-color
-    global USE_COLOR
+    # Handle --no-color flag via module-level override so every call to
+    # use_color() sees the change without relying on import-time globals.
+    global _color_override
     if args.no_color:
-        USE_COLOR = False
+        _color_override = False
 
-    # Route to command
-    if args.command == "export":
-        return cmd_export(args)
-    elif args.command == "api-export":
-        return cmd_api_export(args)
-    elif args.command == "list":
-        return cmd_list(args)
-    elif args.command == "search":
-        return cmd_search(args)
-    elif args.command == "stats":
-        return cmd_stats(args)
-    elif args.command == "show":
-        return cmd_show(args)
-    elif args.command == "check":
-        return cmd_check(args)
-    else:
-        parser.print_help()
-        return 0
+    commands = {
+        "export": cmd_export,
+        "api-export": cmd_api_export,
+        "list": cmd_list,
+        "search": cmd_search,
+        "stats": cmd_stats,
+        "show": cmd_show,
+        "check": cmd_check,
+    }
+
+    handler = commands.get(args.command)
+    if handler:
+        return handler(args)
+
+    # No subcommand provided — show help and exit with error (2 is the
+    # conventional exit code for usage errors, matching argparse itself).
+    parser.print_help()
+    return 2
 
 
 if __name__ == "__main__":
