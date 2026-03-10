@@ -2,6 +2,7 @@
 Base exporter class defining the export interface.
 """
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -10,12 +11,46 @@ from ..cache import GranolaCache
 from ..models import ExportResult
 
 
-class BaseExporter(ABC):
+def safe_filename(name: str, max_length: int = 50) -> str:
     """
-    Abstract base class for all exporters.
+    Convert a string to a filesystem-safe filename.
 
-    Subclasses must implement the export() method to handle
-    their specific format.
+    Args:
+        name: The original string.
+        max_length: Maximum filename length.
+
+    Returns:
+        A filesystem-safe filename.
+    """
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
+    safe = re.sub(r"_+", "_", safe)  # collapse runs of underscores
+    return safe[:max_length].strip(" _-")
+
+
+class Exporter(ABC):
+    """
+    Minimal interface that all exporters satisfy.
+
+    This exists so code that only needs to call export() can accept
+    either cache-based or API-based exporters without lying about
+    inheritance.
+    """
+
+    @abstractmethod
+    def export(self) -> ExportResult:
+        """
+        Export data to the target format.
+
+        Returns:
+            ExportResult with details about the export.
+        """
+
+
+class BaseExporter(Exporter):
+    """
+    Abstract base for cache-based exporters (JSON, Markdown, CSV, HTML).
+
+    Subclasses receive a loaded GranolaCache and must implement export().
     """
 
     format_name: str = "base"
@@ -46,31 +81,6 @@ class BaseExporter(ABC):
         """Create the output directory if it doesn't exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    @abstractmethod
-    def export(self) -> ExportResult:
-        """
-        Export data to the target format.
-
-        Returns:
-            ExportResult with details about the export.
-        """
-        pass
-
     def _safe_filename(self, name: str, max_length: int = 50) -> str:
-        """
-        Convert a string to a safe filename.
-
-        Args:
-            name: The original string.
-            max_length: Maximum filename length.
-
-        Returns:
-            A filesystem-safe filename.
-        """
-        # Replace unsafe characters
-        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
-        # Collapse multiple underscores
-        while "__" in safe:
-            safe = safe.replace("__", "_")
-        # Trim and strip
-        return safe[:max_length].strip(" _-")
+        """Convenience wrapper around the module-level safe_filename."""
+        return safe_filename(name, max_length)
