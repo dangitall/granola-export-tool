@@ -892,8 +892,8 @@ def main() -> int:
         log_level = logging.DEBUG
         log_format = "  %(name)s: %(message)s"
     elif args.quiet:
-        log_level = logging.WARNING
-        log_format = "  %(message)s"
+        log_level = logging.INFO
+        log_format = "%(asctime)s %(levelname)s %(message)s"
     else:
         log_level = logging.INFO
         log_format = "  %(message)s"
