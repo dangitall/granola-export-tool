@@ -60,6 +60,30 @@ class TestAuthenticationError:
         """AuthenticationError should be catchable as APIExportError."""
         assert issubclass(AuthenticationError, APIExportError)
 
+    def test_401_on_later_call_still_aborts(self, exporter):
+        """Auth failure mid-export (not just on first call) should still abort."""
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter([])
+        # Auth error on a later API call (people)
+        exporter.client.get_people.side_effect = _make_http_error(401)
+
+        with pytest.raises(AuthenticationError, match="Authentication failed"):
+            exporter.export()
+
+    def test_403_on_transcript_aborts(self, exporter):
+        """Auth failure during transcript fetching should abort."""
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter(
+            [{"id": "doc-1", "title": "Test"}]
+        )
+        exporter.client.get_document_transcript.side_effect = _make_http_error(403)
+        exporter.client.get_people.return_value = {}
+
+        with pytest.raises(AuthenticationError, match="Authentication failed"):
+            exporter.export()
+
 
 class TestRecoverableErrors:
     """Non-auth HTTP errors should be collected, not raised."""

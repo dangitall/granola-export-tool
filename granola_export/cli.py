@@ -26,7 +26,7 @@ from typing import Optional
 
 from . import __version__
 from .cache import GranolaCache, get_default_cache_path
-from .exporters import get_exporter
+from .exporters import get_exporter, AuthenticationError
 from .search import MeetingSearcher, SearchQuery, quick_search
 
 
@@ -544,7 +544,6 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     # Run export
     import logging
-    from .exporters.api_exporter import AuthenticationError
     logging.basicConfig(
         level=logging.INFO,
         format="  %(message)s",
