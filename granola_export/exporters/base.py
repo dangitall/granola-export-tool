@@ -26,7 +26,8 @@ def safe_filename(name: Optional[str], max_length: int = 50) -> str:
         name = "Untitled"
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
     safe = re.sub(r"_+", "_", safe)  # collapse runs of underscores
-    return safe[:max_length].strip(" _-")
+    result = safe[:max_length].strip(" _-")
+    return result or "Untitled"
 
 
 class Exporter(ABC):

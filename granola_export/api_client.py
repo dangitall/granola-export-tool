@@ -186,7 +186,7 @@ class GranolaAPIClient:
                     # Respect Retry-After header if present, otherwise exponential backoff
                     retry_after = e.headers.get("Retry-After") if e.headers else None
                     if retry_after and retry_after.isdigit():
-                        delay = int(retry_after)
+                        delay = min(int(retry_after), 60)
                     else:
                         delay = 2 ** attempt  # 1s, 2s, 4s
                     logger.warning(

@@ -573,7 +573,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         print()
         print(c(f"{op_name} completed in {elapsed:.1f}s", Colors.DIM))
 
-    if args.sync:
+    if args.sync and result.success:
         sync_stats = result.metadata.get("sync_statistics", {})
         if sync_stats:
             print_success(f"New meetings: {sync_stats.get('new', 0)}")
