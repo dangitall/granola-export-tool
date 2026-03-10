@@ -544,13 +544,20 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     # Run export
     import logging
+    from .exporters.api_exporter import AuthenticationError
     logging.basicConfig(
         level=logging.INFO,
         format="  %(message)s",
     )
 
-    with timed_operation("API export"):
-        result = exporter.export()
+    try:
+        with timed_operation("API export"):
+            result = exporter.export()
+    except AuthenticationError as e:
+        print()
+        print_error(str(e))
+        print_hint("Try logging out and back in to Granola to refresh your token")
+        return 1
 
     print()
     if result.success:

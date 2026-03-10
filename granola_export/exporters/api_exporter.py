@@ -19,6 +19,14 @@ from ..models import ExportResult
 logger = logging.getLogger(__name__)
 
 
+class APIExportError(Exception):
+    """Raised when the API export fails in an unrecoverable way."""
+
+
+class AuthenticationError(APIExportError):
+    """Raised when the API returns 401 or 403 — no point retrying."""
+
+
 class APIExporter(Exporter):
     """
     Export Granola data by fetching from the API.
@@ -68,6 +76,15 @@ class APIExporter(Exporter):
         """Create the output directory if it doesn't exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _check_auth_error(exc: urllib.error.HTTPError) -> None:
+        """Raise AuthenticationError on 401/403 — these are unrecoverable."""
+        if exc.code in (401, 403):
+            raise AuthenticationError(
+                f"Authentication failed (HTTP {exc.code}). "
+                "Check that your Granola token is valid and not expired."
+            ) from exc
+
     def export(self) -> ExportResult:
         """
         Export all data from the API.
@@ -85,15 +102,22 @@ class APIExporter(Exporter):
         transcripts_dir = self.output_dir / "transcripts"
         transcripts_dir.mkdir(exist_ok=True)
 
-        # Fetch workspaces
+        # Fetch workspaces — auth errors here are fatal (fail fast)
         logger.info("Fetching workspaces...")
         try:
             workspaces = self.client.get_workspaces()
             with open(self.output_dir / "workspaces.json", "w") as f:
                 json.dump(workspaces, f, indent=2)
             logger.info(f"Found {len(workspaces)} workspaces")
-        except Exception as e:
-            errors.append(f"Error fetching workspaces: {e}")
+        except urllib.error.HTTPError as e:
+            # First API call: auth failure means nothing else will work
+            self._check_auth_error(e)
+            logger.error(f"HTTP {e.code} fetching workspaces: {e}")
+            errors.append(f"Error fetching workspaces: HTTP {e.code}")
+            workspaces = []
+        except urllib.error.URLError as e:
+            logger.error(f"Network error fetching workspaces: {e.reason}")
+            errors.append(f"Network error fetching workspaces: {e.reason}")
             workspaces = []
 
         # Fetch folders
@@ -103,8 +127,14 @@ class APIExporter(Exporter):
             with open(self.output_dir / "folders.json", "w") as f:
                 json.dump(folders, f, indent=2)
             logger.info(f"Found {len(folders)} folders")
-        except Exception as e:
-            errors.append(f"Error fetching folders: {e}")
+        except urllib.error.HTTPError as e:
+            self._check_auth_error(e)
+            logger.error(f"HTTP {e.code} fetching folders: {e}")
+            errors.append(f"Error fetching folders: HTTP {e.code}")
+            folders = []
+        except urllib.error.URLError as e:
+            logger.error(f"Network error fetching folders: {e.reason}")
+            errors.append(f"Network error fetching folders: {e.reason}")
             folders = []
 
         # Fetch documents
@@ -124,8 +154,13 @@ class APIExporter(Exporter):
                     docs_exported += 1
 
             logger.info(f"Fetched {docs_exported} owned documents")
-        except Exception as e:
-            errors.append(f"Error fetching documents: {e}")
+        except urllib.error.HTTPError as e:
+            self._check_auth_error(e)
+            logger.error(f"HTTP {e.code} fetching documents: {e}")
+            errors.append(f"Error fetching documents: HTTP {e.code}")
+        except urllib.error.URLError as e:
+            logger.error(f"Network error fetching documents: {e.reason}")
+            errors.append(f"Network error fetching documents: {e.reason}")
 
         # Fetch shared documents from folders
         if self.include_shared and folders:
@@ -148,8 +183,13 @@ class APIExporter(Exporter):
                         all_documents.append(doc)
                         docs_exported += 1
                     logger.info(f"Fetched {len(shared_docs)} shared documents")
-                except Exception as e:
-                    errors.append(f"Error fetching shared documents: {e}")
+                except urllib.error.HTTPError as e:
+                    self._check_auth_error(e)
+                    logger.error(f"HTTP {e.code} fetching shared documents: {e}")
+                    errors.append(f"Error fetching shared documents: HTTP {e.code}")
+                except urllib.error.URLError as e:
+                    logger.error(f"Network error fetching shared documents: {e.reason}")
+                    errors.append(f"Network error fetching shared documents: {e.reason}")
 
         # Write individual document files
         for doc in all_documents:
@@ -201,8 +241,13 @@ class APIExporter(Exporter):
             people = self.client.get_people()
             with open(self.output_dir / "people.json", "w") as f:
                 json.dump(people, f, indent=2)
-        except Exception as e:
-            errors.append(f"Error fetching people: {e}")
+        except urllib.error.HTTPError as e:
+            self._check_auth_error(e)
+            logger.error(f"HTTP {e.code} fetching people: {e}")
+            errors.append(f"Error fetching people: HTTP {e.code}")
+        except urllib.error.URLError as e:
+            logger.error(f"Network error fetching people: {e.reason}")
+            errors.append(f"Network error fetching people: {e.reason}")
 
         # Write combined documents file
         with open(self.output_dir / "all_meetings.json", "w") as f:
