@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import re
 import sys
 import threading
@@ -27,6 +28,8 @@ from . import __version__
 from .cache import GranolaCache, get_default_cache_path
 from .exporters import get_exporter, AuthenticationError
 from .search import MeetingSearcher, SearchQuery, quick_search
+
+logger = logging.getLogger(__name__)
 
 
 # ANSI color codes for terminal output
@@ -542,13 +545,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
     print_success("API connection verified")
     print()
 
-    # Run export
-    import logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="  %(message)s",
-    )
-
+    # Run export (logging is configured in main() based on --verbose/--quiet)
     start = time.monotonic()
     try:
         result = exporter.export()
@@ -663,6 +660,18 @@ Examples:
         "--no-color",
         action="store_true",
         help="Disable colored output",
+    )
+
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show detailed progress (DEBUG-level logging)",
+    )
+    verbosity.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Suppress non-essential output",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -841,6 +850,18 @@ def main() -> int:
     # (e.g. in tests) don't leak state from a previous run.
     global _color_override
     _color_override = False if args.no_color else None
+
+    # Configure logging based on verbosity flags
+    if args.verbose:
+        log_level = logging.DEBUG
+        log_format = "  %(name)s: %(message)s"
+    elif args.quiet:
+        log_level = logging.WARNING
+        log_format = "  %(message)s"
+    else:
+        log_level = logging.INFO
+        log_format = "  %(message)s"
+    logging.basicConfig(level=log_level, format=log_format, force=True)
 
     commands = {
         "export": cmd_export,
