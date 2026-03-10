@@ -8,7 +8,7 @@ double-encoded JSON structure into usable data models.
 import json
 import platform
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 from datetime import datetime
 
 from .models import (
@@ -419,7 +419,7 @@ class GranolaCache:
         self._ensure_loaded()
         return self._state
 
-    def get_raw_key(self, key: str) -> Optional[any]:
+    def get_raw_key(self, key: str) -> Optional[Any]:
         """
         Get a raw value from the state by key.
 
