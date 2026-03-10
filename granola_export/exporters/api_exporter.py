@@ -7,23 +7,25 @@ Useful for shared documents and team-wide exports.
 
 import json
 import logging
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .base import BaseExporter
+from .base import Exporter, safe_filename
 from ..api_client import GranolaAPIClient, get_token_from_local
 from ..models import ExportResult
 
 logger = logging.getLogger(__name__)
 
 
-class APIExporter(BaseExporter):
+class APIExporter(Exporter):
     """
     Export Granola data by fetching from the API.
 
-    Unlike cache-based exporters, this fetches fresh data from
-    Granola's servers and can access shared documents.
+    This is intentionally *not* a BaseExporter subclass — it does not use
+    a GranolaCache.  Both APIExporter and BaseExporter satisfy the Exporter
+    interface so callers that only need export() can accept either.
 
     Example:
         >>> exporter = APIExporter(output_dir=Path("./export"))
@@ -52,19 +54,17 @@ class APIExporter(BaseExporter):
             include_shared: Whether to fetch shared documents from folders.
             workspace_id: Optional workspace filter.
         """
-        # Don't call super().__init__ since we don't have a cache
         self.output_dir = Path(output_dir)
         self.include_transcripts = include_transcripts
         self.include_shared = include_shared
         self.workspace_id = workspace_id
 
-        # Initialize API client
         if access_token:
             self.client = GranolaAPIClient.from_token(access_token)
         else:
             self.client = GranolaAPIClient.from_local_token()
 
-    def prepare_output_dir(self) -> None:
+    def _prepare_output_dir(self) -> None:
         """Create the output directory if it doesn't exist."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,7 +75,7 @@ class APIExporter(BaseExporter):
         Returns:
             ExportResult with export details.
         """
-        self.prepare_output_dir()
+        self._prepare_output_dir()
         errors = []
 
         # Create subdirectories
@@ -155,8 +155,7 @@ class APIExporter(BaseExporter):
         for doc in all_documents:
             doc_id = doc.get("id", "unknown")
             title = doc.get("title", "Untitled")
-            safe_title = self._safe_filename(title)
-            filename = f"{safe_title}_{doc_id[:8]}.json"
+            filename = f"{safe_filename(title)}_{doc_id[:8]}.json"
 
             with open(meetings_dir / filename, "w") as f:
                 json.dump(doc, f, indent=2)
@@ -186,10 +185,13 @@ class APIExporter(BaseExporter):
                                 indent=2,
                             )
                         trans_exported += 1
-                except Exception as e:
-                    # 404 is expected for docs without transcripts
-                    if "404" not in str(e):
+                except urllib.error.HTTPError as e:
+                    # get_document_transcript returns None on 404 (no transcript),
+                    # so a 404 here shouldn't happen — but guard against it.
+                    if e.code != 404:
                         errors.append(f"Error fetching transcript for {doc_id}: {e}")
+                except Exception as e:
+                    errors.append(f"Error fetching transcript for {doc_id}: {e}")
 
             logger.info(f"Fetched {trans_exported} transcripts")
 
@@ -245,10 +247,3 @@ class APIExporter(BaseExporter):
             format="api",
             errors=errors,
         )
-
-    def _safe_filename(self, name: str, max_length: int = 50) -> str:
-        """Convert a string to a safe filename."""
-        safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
-        while "__" in safe:
-            safe = safe.replace("__", "_")
-        return safe[:max_length].strip(" _-")
