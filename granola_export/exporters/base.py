@@ -11,17 +11,19 @@ from ..cache import GranolaCache
 from ..models import ExportResult
 
 
-def safe_filename(name: str, max_length: int = 50) -> str:
+def safe_filename(name: Optional[str], max_length: int = 50) -> str:
     """
     Convert a string to a filesystem-safe filename.
 
     Args:
-        name: The original string.
+        name: The original string (None becomes "Untitled").
         max_length: Maximum filename length.
 
     Returns:
         A filesystem-safe filename.
     """
+    if not name:
+        name = "Untitled"
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
     safe = re.sub(r"_+", "_", safe)  # collapse runs of underscores
     return safe[:max_length].strip(" _-")

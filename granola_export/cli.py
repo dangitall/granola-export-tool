@@ -574,17 +574,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         print(c(f"{op_name} completed in {elapsed:.1f}s", Colors.DIM))
 
     if args.sync:
-        # Load manifest to get sync statistics
-        manifest_path = args.output / "manifest.json"
-        sync_stats = {}
-        if manifest_path.exists():
-            try:
-                with open(manifest_path) as f:
-                    manifest = json.load(f)
-                    sync_stats = manifest.get("sync_statistics", {})
-            except (json.JSONDecodeError, IOError):
-                pass
-
+        sync_stats = result.metadata.get("sync_statistics", {})
         if sync_stats:
             print_success(f"New meetings: {sync_stats.get('new', 0)}")
             print_success(f"Updated meetings: {sync_stats.get('updated', 0)}")

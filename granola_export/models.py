@@ -566,6 +566,7 @@ class ExportResult:
     transcripts_exported: int
     format: str
     errors: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
         status = "Success" if self.success else "Failed"

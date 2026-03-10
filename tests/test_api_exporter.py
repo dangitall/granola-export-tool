@@ -171,3 +171,108 @@ class TestSuccessfulExport:
         assert (out / "workspaces.json").exists()
         assert list((out / "meetings").iterdir())
         assert list((out / "transcripts").iterdir())
+
+
+@pytest.fixture
+def sync_exporter(tmp_path):
+    """Create an APIExporter in sync mode with a mocked client."""
+    with patch(
+        "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
+    ) as mock_from_token:
+        mock_client = MagicMock()
+        mock_from_token.return_value = mock_client
+        exp = APIExporter(
+            output_dir=tmp_path / "export",
+            access_token="fake-token",
+            sync_mode=True,
+        )
+    return exp
+
+
+class TestSyncMode:
+    """Tests for incremental sync mode."""
+
+    def _setup_basic_mocks(self, exporter, docs):
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter(docs)
+        exporter.client.get_document_transcript.return_value = None
+        exporter.client.get_people.return_value = {}
+
+    def test_first_sync_exports_everything(self, sync_exporter):
+        """First sync (no previous manifest) should export all documents."""
+        docs = [
+            {"id": "doc-1", "title": "Meeting 1", "updated_at": "2025-01-01T00:00:00Z"},
+            {"id": "doc-2", "title": "Meeting 2", "updated_at": "2025-01-02T00:00:00Z"},
+        ]
+        self._setup_basic_mocks(sync_exporter, docs)
+
+        result = sync_exporter.export()
+
+        assert result.documents_exported == 2
+        assert result.metadata["sync_statistics"]["new"] == 2
+        assert result.metadata["sync_statistics"]["skipped"] == 0
+
+    def test_second_sync_skips_unchanged(self, sync_exporter):
+        """Second sync should skip documents with unchanged timestamps."""
+        docs = [
+            {"id": "doc-1", "title": "Meeting 1", "updated_at": "2025-01-01T00:00:00Z"},
+            {"id": "doc-2", "title": "Meeting 2", "updated_at": "2025-01-02T00:00:00Z"},
+        ]
+        self._setup_basic_mocks(sync_exporter, docs)
+
+        # First sync
+        sync_exporter.export()
+
+        # Second sync with same data
+        sync_exporter.client.get_all_documents.return_value = iter(docs)
+        result = sync_exporter.export()
+
+        assert result.documents_exported == 0
+        assert result.metadata["sync_statistics"]["skipped"] == 2
+        assert result.metadata["sync_statistics"]["new"] == 0
+
+    def test_sync_detects_updated_documents(self, sync_exporter):
+        """Sync should detect documents with newer timestamps."""
+        docs_v1 = [
+            {"id": "doc-1", "title": "Meeting 1", "updated_at": "2025-01-01T00:00:00Z"},
+        ]
+        self._setup_basic_mocks(sync_exporter, docs_v1)
+        sync_exporter.export()
+
+        # Second sync with updated timestamp
+        docs_v2 = [
+            {"id": "doc-1", "title": "Meeting 1 (edited)", "updated_at": "2025-01-15T00:00:00Z"},
+        ]
+        sync_exporter.client.get_all_documents.return_value = iter(docs_v2)
+        result = sync_exporter.export()
+
+        assert result.documents_exported == 1
+        assert result.metadata["sync_statistics"]["updated"] == 1
+
+    def test_timestamp_comparison_handles_format_variations(self, sync_exporter):
+        """Sync should correctly compare Z vs +00:00 format timestamps."""
+        docs_v1 = [
+            {"id": "doc-1", "title": "Test", "updated_at": "2025-01-01T00:00:00Z"},
+        ]
+        self._setup_basic_mocks(sync_exporter, docs_v1)
+        sync_exporter.export()
+
+        # Same timestamp in different format — should be unchanged
+        docs_v2 = [
+            {"id": "doc-1", "title": "Test", "updated_at": "2025-01-01T00:00:00+00:00"},
+        ]
+        sync_exporter.client.get_all_documents.return_value = iter(docs_v2)
+        result = sync_exporter.export()
+
+        assert result.documents_exported == 0
+        assert result.metadata["sync_statistics"]["skipped"] == 1
+
+    def test_manifest_written_atomically(self, sync_exporter):
+        """Manifest should be written via temp file (no .tmp left behind)."""
+        self._setup_basic_mocks(sync_exporter, [{"id": "d1", "title": "T"}])
+        sync_exporter.export()
+
+        out = Path(sync_exporter.output_dir)
+        assert (out / "manifest.json").exists()
+        assert not (out / "manifest.json.tmp").exists()

@@ -101,6 +101,14 @@ class APIExporter(Exporter):
             logger.warning(f"Could not load previous manifest: {e}")
             return {}
 
+    @staticmethod
+    def _parse_timestamp(value: str) -> Optional[datetime]:
+        """Parse an ISO 8601 timestamp string, returning None on failure."""
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+
     def _is_document_changed(
         self, doc: dict, previous_docs: dict
     ) -> tuple[bool, str]:
@@ -115,15 +123,22 @@ class APIExporter(Exporter):
             return True, "new"
 
         prev_info = previous_docs[doc_id]
-        doc_updated = doc.get("updated_at") or doc.get("updatedAt")
-        prev_updated = prev_info.get("updated_at")
+        doc_updated_str = doc.get("updated_at") or doc.get("updatedAt")
+        prev_updated_str = prev_info.get("updated_at")
 
         # If we can't compare timestamps, assume changed
-        if not doc_updated or not prev_updated:
+        if not doc_updated_str or not prev_updated_str:
             return True, "updated"
 
-        # Compare timestamps
-        if doc_updated > prev_updated:
+        # Parse to datetime to handle format variations (Z vs +00:00, etc.)
+        doc_dt = self._parse_timestamp(doc_updated_str)
+        prev_dt = self._parse_timestamp(prev_updated_str)
+
+        if not doc_dt or not prev_dt:
+            # Unparseable — assume changed to be safe
+            return True, "updated"
+
+        if doc_dt > prev_dt:
             return True, "updated"
 
         return False, "unchanged"
@@ -270,7 +285,7 @@ class APIExporter(Exporter):
         # Write individual document files (only changed ones in sync mode)
         for doc in docs_to_write:
             doc_id = doc.get("id", "unknown")
-            safe_title = safe_filename(doc.get("title") or "Untitled")
+            safe_title = safe_filename(doc.get("title"))
             filename = f"{safe_title}_{doc_id[:8]}.json"
 
             with open(meetings_dir / filename, "w") as f:
@@ -380,8 +395,21 @@ class APIExporter(Exporter):
                 "skipped": docs_skipped,
             }
 
-        with open(self.output_dir / "manifest.json", "w") as f:
+        # Write manifest atomically so an interrupted sync doesn't leave
+        # a half-written manifest that corrupts the next run.
+        manifest_path = self.output_dir / "manifest.json"
+        tmp_path = manifest_path.with_suffix(".json.tmp")
+        with open(tmp_path, "w") as f:
             json.dump(manifest, f, indent=2)
+        tmp_path.replace(manifest_path)
+
+        result_metadata = {}
+        if self.sync_mode:
+            result_metadata["sync_statistics"] = {
+                "new": docs_new,
+                "updated": docs_updated,
+                "skipped": docs_skipped,
+            }
 
         return ExportResult(
             success=len(errors) == 0,
@@ -390,4 +418,5 @@ class APIExporter(Exporter):
             transcripts_exported=trans_exported,
             format="api",
             errors=errors,
+            metadata=result_metadata,
         )

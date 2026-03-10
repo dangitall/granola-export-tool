@@ -181,11 +181,16 @@ class GranolaAPIClient:
                     return json.loads(raw_data.decode("utf-8"))
 
             except urllib.error.HTTPError as e:
-                # Retry on 5xx server errors
-                if e.code >= 500 and attempt < max_retries:
-                    delay = 2 ** attempt  # 1s, 2s, 4s
+                # Retry on 429 (rate limit) and 5xx (server errors)
+                if (e.code == 429 or e.code >= 500) and attempt < max_retries:
+                    # Respect Retry-After header if present, otherwise exponential backoff
+                    retry_after = e.headers.get("Retry-After") if e.headers else None
+                    if retry_after and retry_after.isdigit():
+                        delay = int(retry_after)
+                    else:
+                        delay = 2 ** attempt  # 1s, 2s, 4s
                     logger.warning(
-                        f"Server error {e.code}, retrying in {delay}s "
+                        f"HTTP {e.code}, retrying in {delay}s "
                         f"(attempt {attempt + 1}/{max_retries})"
                     )
                     time.sleep(delay)
@@ -217,9 +222,10 @@ class GranolaAPIClient:
                 logger.error(f"Network error after {max_retries} retries: {e.reason}")
                 raise
 
-        # Should not reach here, but just in case
+        # Should not reach here, but guard against it
         if last_exception:
             raise last_exception
+        raise RuntimeError("_request completed without returning or raising")
 
     # -------------------------------------------------------------------------
     # Documents
