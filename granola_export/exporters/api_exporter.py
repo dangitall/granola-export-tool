@@ -25,7 +25,7 @@ class APIExporter(Exporter):
 
     This is intentionally *not* a BaseExporter subclass — it does not use
     a GranolaCache.  Both APIExporter and BaseExporter satisfy the Exporter
-    protocol so callers that only need export() can accept either.
+    interface so callers that only need export() can accept either.
 
     Example:
         >>> exporter = APIExporter(output_dir=Path("./export"))

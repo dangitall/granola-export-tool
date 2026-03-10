@@ -23,7 +23,7 @@ __all__ = [
 ]
 
 
-def get_exporter(format_name: str) -> type:
+def get_exporter(format_name: str) -> type[Exporter]:
     """
     Get the exporter class for a given format.
 
