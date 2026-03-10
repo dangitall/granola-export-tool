@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Exporter, safe_filename
-from ..api_client import GranolaAPIClient, get_token_from_local
+from ..api_client import GranolaAPIClient, get_folder_ids_from_local_cache, get_token_from_local
 from ..models import ExportResult
 
 logger = logging.getLogger(__name__)
@@ -190,11 +190,14 @@ class APIExporter(Exporter):
             errors.append(f"Network error fetching workspaces: {e.reason}")
             workspaces = []
 
-        # Fetch folders — pass known IDs from previous manifest so the
-        # client can fall back to the reliable singular endpoint when the
-        # bulk endpoint (which frequently 500s) fails.
+        # Fetch folders — merge folder IDs from previous manifest and local
+        # Granola cache so the client can fall back to the reliable singular
+        # endpoint when the bulk endpoint (which frequently 500s) fails.
+        # The local cache picks up new folders via websocket events.
         logger.info("Fetching folders...")
-        known_folder_ids = list(previous_manifest.get("folder_ids", []))
+        manifest_ids = set(previous_manifest.get("folder_ids", []))
+        local_cache_ids = set(get_folder_ids_from_local_cache())
+        known_folder_ids = list(manifest_ids | local_cache_ids)
         try:
             folders = self.client.get_document_lists(
                 known_ids=known_folder_ids or None,

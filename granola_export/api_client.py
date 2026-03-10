@@ -17,7 +17,7 @@ from typing import Iterator, Optional
 import urllib.request
 import urllib.error
 
-from .paths import get_token_path
+from .paths import get_granola_data_dir, get_token_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,36 @@ def get_token_from_local() -> Optional[APIConfig]:
     except (json.JSONDecodeError, IOError) as e:
         logger.error(f"Failed to read token file: {e}")
         return None
+
+
+def get_folder_ids_from_local_cache() -> list[str]:
+    """
+    Read folder IDs from Granola's local cache file.
+
+    The GUI client maintains folder state via websockets, so its local
+    cache is the most up-to-date source of folder IDs — including newly
+    created folders that the broken bulk API endpoint can't return.
+
+    Returns:
+        List of folder UUID strings, or empty list if unavailable.
+    """
+    cache_path = get_granola_data_dir() / "cache-v4.json"
+    if not cache_path.exists():
+        return []
+
+    try:
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+        doc_lists = data.get("cache", {}).get("state", {}).get("documentLists", {})
+        if isinstance(doc_lists, dict):
+            ids = list(doc_lists.keys())
+            if ids:
+                logger.info(f"Found {len(ids)} folder IDs in local Granola cache")
+            return ids
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Could not read local cache for folder IDs: {e}")
+
+    return []
 
 
 class GranolaAPIClient:
