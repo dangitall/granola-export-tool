@@ -6,7 +6,6 @@ double-encoded JSON structure into usable data models.
 """
 
 import json
-import platform
 from pathlib import Path
 from typing import Iterator, Optional
 from datetime import datetime
@@ -20,31 +19,9 @@ from .models import (
     Calendar,
     Folder,
 )
-
-
-def get_default_cache_path() -> Path:
-    """
-    Get the default Granola cache path for the current platform.
-
-    Returns:
-        Path to the Granola cache file.
-
-    Raises:
-        NotImplementedError: If the platform is not supported.
-    """
-    system = platform.system()
-
-    if system == "Darwin":  # macOS
-        return Path.home() / "Library/Application Support/Granola/cache-v3.json"
-    elif system == "Windows":
-        appdata = Path.home() / "AppData/Roaming"
-        return appdata / "Granola/cache-v3.json"
-    elif system == "Linux":
-        # Linux typically follows XDG spec
-        xdg_config = Path.home() / ".config"
-        return xdg_config / "Granola/cache-v3.json"
-    else:
-        raise NotImplementedError(f"Unsupported platform: {system}")
+# Re-exported for backward compatibility: cli.py and external consumers
+# import get_default_cache_path from this module.
+from .paths import get_default_cache_path  # noqa: F401
 
 
 class GranolaCache:

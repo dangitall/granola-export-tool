@@ -10,13 +10,13 @@ Fetches data from Granola's API endpoints, useful for:
 import gzip
 import json
 import logging
-import platform
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from typing import Iterator, Optional
 import urllib.request
 import urllib.error
+
+from .paths import get_token_path
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +40,7 @@ def get_token_from_local() -> Optional[APIConfig]:
     Returns:
         APIConfig if token found, None otherwise.
     """
-    system = platform.system()
-
-    if system == "Darwin":
-        token_path = Path.home() / "Library/Application Support/Granola/supabase.json"
-    elif system == "Windows":
-        token_path = Path.home() / "AppData/Roaming/Granola/supabase.json"
-    else:
-        token_path = Path.home() / ".config/Granola/supabase.json"
+    token_path = get_token_path()
 
     if not token_path.exists():
         logger.warning(f"Token file not found at {token_path}")
