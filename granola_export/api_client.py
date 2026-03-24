@@ -10,6 +10,7 @@ Fetches data from Granola's API endpoints, useful for:
 import gzip
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,6 +131,76 @@ def get_shared_doc_ids_from_local_cache() -> list[str]:
         logger.debug(f"Could not read local cache for shared document IDs: {e}")
 
     return []
+
+
+def get_owned_doc_ids_from_local_cache() -> set[str]:
+    """
+    Return the set of owned document IDs from the local cache.
+
+    Used to filter out owned documents when discovering shared ones.
+    """
+    cache_path = get_granola_data_dir() / CACHE_FILENAME
+    if not cache_path.exists():
+        return set()
+
+    try:
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+        docs = data.get("cache", {}).get("state", {}).get("documents", {})
+        if isinstance(docs, dict):
+            return set(docs.keys())
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Could not read local cache for owned doc IDs: {e}")
+
+    return set()
+
+
+_UUID_RE = re.compile(
+    rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
+
+
+def get_viewed_meeting_ids_from_leveldb() -> set[str]:
+    """
+    Scan Granola's Local Storage LevelDB files for meeting IDs.
+
+    The Granola desktop app records Amplitude analytics events in
+    Electron's Local Storage, stored as LevelDB table files.  Meeting
+    navigation entries follow the pattern ``meeting/<UUID>``.
+
+    Because the LevelDB is locked by the running app, this reads the
+    ``.ldb`` and ``.log`` files directly rather than opening the
+    database.
+
+    Returns:
+        Set of document UUID strings the user has viewed.
+    """
+    leveldb_dir = get_granola_data_dir() / "Local Storage" / "leveldb"
+    if not leveldb_dir.is_dir():
+        return set()
+
+    content = bytearray()
+    for path in leveldb_dir.iterdir():
+        if path.suffix in (".ldb", ".log"):
+            try:
+                content.extend(path.read_bytes())
+            except IOError:
+                continue
+
+    if not content:
+        return set()
+
+    ids: set[str] = set()
+    for match in re.finditer(rb"meeting/" + _UUID_RE.pattern, content):
+        uuid = _UUID_RE.search(match.group())
+        if uuid:
+            ids.add(uuid.group().decode("ascii"))
+
+    if ids:
+        logger.info(
+            f"Found {len(ids)} meeting IDs in Local Storage LevelDB"
+        )
+    return ids
 
 
 class GranolaAPIClient:
@@ -392,6 +463,16 @@ class GranolaAPIClient:
 
             offset += limit
 
+    def get_shared_documents(self) -> list[dict]:
+        """
+        Fetch documents that have been shared with the current user.
+
+        Returns:
+            List of document dictionaries.
+        """
+        response = self._request("/v1/get-shared-documents", data={})
+        return response.get("docs", [])
+
     def get_documents_batch(
         self,
         document_ids: list[str],
@@ -424,6 +505,77 @@ class GranolaAPIClient:
             all_docs.extend(docs)
 
         return all_docs
+
+    @staticmethod
+    def get_shared_document_from_web(document_id: str) -> Optional[dict]:
+        """
+        Fetch a shared document from the Granola web share page.
+
+        Some shared documents are not accessible via the API but are
+        publicly readable at ``notes.granola.ai/d/<id>``.  This method
+        scrapes the server-rendered page to extract metadata and notes.
+
+        Args:
+            document_id: The document UUID.
+
+        Returns:
+            A dict with id, title, creator, notes_html, and _shared
+            flag, or None if the page doesn't contain usable content.
+        """
+        url = f"https://notes.granola.ai/d/{document_id}"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html = resp.read().decode("utf-8")
+        except (urllib.error.URLError, OSError) as e:
+            logger.warning(f"Could not fetch share page for {document_id}: {e}")
+            return None
+
+        # RSC payload chunks are embedded as self.__next_f.push([1,"..."])
+        chunks = re.findall(
+            r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html
+        )
+
+        title = None
+        creator = None
+        notes_html = None
+
+        for chunk in chunks:
+            try:
+                text = json.loads('"' + chunk + '"')
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+            if title is None and '"og:title"' in text:
+                m = re.search(r'"og:title","content":"([^"]+)"', text)
+                if m:
+                    title = m.group(1)
+
+            if creator is None and "creatorName" in text:
+                m = re.search(r'"creatorName":"([^"]+)"', text)
+                if m:
+                    creator = m.group(1)
+
+            stripped = text.strip()
+            if notes_html is None and (
+                stripped.startswith("<h") or stripped.startswith("<p")
+            ):
+                notes_html = text
+
+        if not title and not notes_html:
+            return None
+
+        return {
+            "id": document_id,
+            "title": title or "Untitled",
+            "notes": notes_html or "",
+            "user_id": None,
+            "_shared": True,
+            "_source": "web",
+            "_creator": creator,
+        }
 
     # -------------------------------------------------------------------------
     # Transcripts

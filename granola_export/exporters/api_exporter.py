@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Exporter, safe_filename
-from ..api_client import GranolaAPIClient, get_folder_ids_from_local_cache, get_shared_doc_ids_from_local_cache, get_token_from_local
+from ..api_client import (
+    GranolaAPIClient,
+    get_folder_ids_from_local_cache,
+    get_owned_doc_ids_from_local_cache,
+    get_shared_doc_ids_from_local_cache,
+    get_viewed_meeting_ids_from_leveldb,
+    get_token_from_local,
+)
 from ..models import ExportResult
 
 logger = logging.getLogger(__name__)
@@ -246,10 +253,10 @@ class APIExporter(Exporter):
             logger.error(f"Network error fetching documents: {e.reason}")
             errors.append(f"Network error fetching documents: {e.reason}")
 
-        # Fetch shared documents from folders and local cache
+        # Fetch shared documents from multiple discovery sources
         if self.include_shared:
-            logger.info("Fetching shared documents...")
-            shared_doc_ids = set()
+            logger.info("Discovering shared documents...")
+            shared_doc_ids: set[str] = set()
 
             # Source 1: documents in folders that aren't owned
             for folder in folders:
@@ -264,14 +271,42 @@ class APIExporter(Exporter):
                 if doc_id not in document_ids_seen:
                     shared_doc_ids.add(doc_id)
 
+            # Source 3: /v1/get-shared-documents API endpoint
+            try:
+                for doc in self.client.get_shared_documents():
+                    doc_id = doc.get("id")
+                    if doc_id and doc_id not in document_ids_seen:
+                        shared_doc_ids.add(doc_id)
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                logger.debug(f"Could not fetch shared documents API: {e}")
+
+            # Source 4: meetings opened via share links (LevelDB navigation history)
+            owned_cache_ids = get_owned_doc_ids_from_local_cache()
+            for doc_id in get_viewed_meeting_ids_from_leveldb():
+                if (
+                    doc_id not in document_ids_seen
+                    and doc_id not in owned_cache_ids
+                ):
+                    shared_doc_ids.add(doc_id)
+
             if shared_doc_ids:
-                logger.info(f"Fetching {len(shared_doc_ids)} shared documents...")
+                logger.info(f"Found {len(shared_doc_ids)} shared document IDs")
+
+                # Step 1: try the batch API (works for workspace-shared docs)
+                api_fetched_ids: set[str] = set()
                 try:
-                    shared_docs = self.client.get_documents_batch(list(shared_doc_ids))
+                    shared_docs = self.client.get_documents_batch(
+                        list(shared_doc_ids)
+                    )
                     for doc in shared_docs:
                         doc["_shared"] = True
                         all_documents.append(doc)
-                    logger.info(f"Fetched {len(shared_docs)} shared documents")
+                        if doc.get("id"):
+                            api_fetched_ids.add(doc["id"])
+                    if shared_docs:
+                        logger.info(
+                            f"Fetched {len(shared_docs)} shared documents via API"
+                        )
                 except urllib.error.HTTPError as e:
                     self._check_auth_error(e)
                     logger.error(f"HTTP {e.code} fetching shared documents: {e}")
@@ -279,6 +314,26 @@ class APIExporter(Exporter):
                 except urllib.error.URLError as e:
                     logger.error(f"Network error fetching shared documents: {e.reason}")
                     errors.append(f"Network error fetching shared documents: {e.reason}")
+
+                # Step 2: fall back to web scraping for docs the API couldn't return
+                remaining = shared_doc_ids - api_fetched_ids - document_ids_seen
+                if remaining:
+                    logger.info(
+                        f"Fetching {len(remaining)} shared documents from web..."
+                    )
+                    web_count = 0
+                    for doc_id in remaining:
+                        doc = GranolaAPIClient.get_shared_document_from_web(
+                            doc_id
+                        )
+                        if doc:
+                            all_documents.append(doc)
+                            web_count += 1
+                            time.sleep(0.3)
+                    if web_count:
+                        logger.info(
+                            f"Fetched {web_count} shared documents from web"
+                        )
 
         # Determine which documents need to be written (sync mode filtering)
         docs_to_write = []
