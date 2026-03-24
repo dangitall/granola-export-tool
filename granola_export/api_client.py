@@ -17,7 +17,7 @@ from typing import Iterator, Optional
 import urllib.request
 import urllib.error
 
-from .paths import get_granola_data_dir, get_token_path
+from .paths import CACHE_FILENAME, get_granola_data_dir, get_token_path
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def get_folder_ids_from_local_cache() -> list[str]:
     Returns:
         List of folder UUID strings, or empty list if unavailable.
     """
-    cache_path = get_granola_data_dir() / "cache-v4.json"
+    cache_path = get_granola_data_dir() / CACHE_FILENAME
     if not cache_path.exists():
         return []
 
@@ -99,6 +99,35 @@ def get_folder_ids_from_local_cache() -> list[str]:
             return ids
     except (json.JSONDecodeError, IOError) as e:
         logger.debug(f"Could not read local cache for folder IDs: {e}")
+
+    return []
+
+
+def get_shared_doc_ids_from_local_cache() -> list[str]:
+    """
+    Read shared document IDs from Granola's local cache file.
+
+    The GUI client tracks documents shared with the current user in
+    ``cache.state.sharedDocuments`` (a dict keyed by document ID).
+
+    Returns:
+        List of document UUID strings, or empty list if unavailable.
+    """
+    cache_path = get_granola_data_dir() / CACHE_FILENAME
+    if not cache_path.exists():
+        return []
+
+    try:
+        with open(cache_path, "r") as f:
+            data = json.load(f)
+        shared_docs = data.get("cache", {}).get("state", {}).get("sharedDocuments", {})
+        if isinstance(shared_docs, dict):
+            ids = list(shared_docs.keys())
+            if ids:
+                logger.info(f"Found {len(ids)} shared document IDs in local Granola cache")
+            return ids
+    except (json.JSONDecodeError, IOError) as e:
+        logger.debug(f"Could not read local cache for shared document IDs: {e}")
 
     return []
 

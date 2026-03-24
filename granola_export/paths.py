@@ -39,7 +39,7 @@ def get_granola_data_dir() -> Path:
 
 
 # Well-known file names within the Granola data directory.
-CACHE_FILENAME = "cache-v3.json"
+CACHE_FILENAME = "cache-v6.json"
 TOKEN_FILENAME = "supabase.json"
 
 

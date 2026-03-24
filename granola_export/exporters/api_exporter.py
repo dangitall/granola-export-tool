@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import Exporter, safe_filename
-from ..api_client import GranolaAPIClient, get_folder_ids_from_local_cache, get_token_from_local
+from ..api_client import GranolaAPIClient, get_folder_ids_from_local_cache, get_shared_doc_ids_from_local_cache, get_token_from_local
 from ..models import ExportResult
 
 logger = logging.getLogger(__name__)
@@ -246,17 +246,23 @@ class APIExporter(Exporter):
             logger.error(f"Network error fetching documents: {e.reason}")
             errors.append(f"Network error fetching documents: {e.reason}")
 
-        # Fetch shared documents from folders
-        if self.include_shared and folders:
-            logger.info("Fetching shared documents from folders...")
+        # Fetch shared documents from folders and local cache
+        if self.include_shared:
+            logger.info("Fetching shared documents...")
             shared_doc_ids = set()
 
+            # Source 1: documents in folders that aren't owned
             for folder in folders:
                 folder_docs = folder.get("documents") or folder.get("document_ids") or []
                 for doc in folder_docs:
                     doc_id = doc.get("id") if isinstance(doc, dict) else doc
                     if doc_id and doc_id not in document_ids_seen:
                         shared_doc_ids.add(doc_id)
+
+            # Source 2: shared-with-me documents from local cache
+            for doc_id in get_shared_doc_ids_from_local_cache():
+                if doc_id not in document_ids_seen:
+                    shared_doc_ids.add(doc_id)
 
             if shared_doc_ids:
                 logger.info(f"Fetching {len(shared_doc_ids)} shared documents...")
