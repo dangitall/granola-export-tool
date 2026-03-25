@@ -29,16 +29,42 @@ def _make_http_error(code: int) -> urllib.error.HTTPError:
 @pytest.fixture
 def exporter(tmp_path):
     """Create an APIExporter with a mocked client."""
-    with patch(
-        "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
-    ) as mock_from_token:
-        mock_client = MagicMock()
-        mock_from_token.return_value = mock_client
-        exp = APIExporter(
-            output_dir=tmp_path / "export",
-            access_token="fake-token",
-        )
-    return exp
+    patches = [
+        patch(
+            "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_shared_doc_ids_from_local_cache",
+            return_value=[],
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_owned_doc_ids_from_local_cache",
+            return_value=set(),
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_viewed_meeting_ids_from_leveldb",
+            return_value=set(),
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_folder_ids_from_local_cache",
+            return_value=[],
+        ),
+    ]
+    mocks = [p.start() for p in patches]
+    mock_from_token = mocks[0]
+
+    mock_client = MagicMock()
+    mock_client.get_shared_documents.return_value = []
+    mock_from_token.return_value = mock_client
+    exp = APIExporter(
+        output_dir=tmp_path / "export",
+        access_token="fake-token",
+    )
+
+    yield exp
+
+    for p in patches:
+        p.stop()
 
 
 class TestAuthenticationError:
@@ -193,17 +219,43 @@ class TestSuccessfulExport:
 @pytest.fixture
 def sync_exporter(tmp_path):
     """Create an APIExporter in sync mode with a mocked client."""
-    with patch(
-        "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
-    ) as mock_from_token:
-        mock_client = MagicMock()
-        mock_from_token.return_value = mock_client
-        exp = APIExporter(
-            output_dir=tmp_path / "export",
-            access_token="fake-token",
-            sync_mode=True,
-        )
-    return exp
+    patches = [
+        patch(
+            "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_shared_doc_ids_from_local_cache",
+            return_value=[],
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_owned_doc_ids_from_local_cache",
+            return_value=set(),
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_viewed_meeting_ids_from_leveldb",
+            return_value=set(),
+        ),
+        patch(
+            "granola_export.exporters.api_exporter.get_folder_ids_from_local_cache",
+            return_value=[],
+        ),
+    ]
+    mocks = [p.start() for p in patches]
+    mock_from_token = mocks[0]
+
+    mock_client = MagicMock()
+    mock_client.get_shared_documents.return_value = []
+    mock_from_token.return_value = mock_client
+    exp = APIExporter(
+        output_dir=tmp_path / "export",
+        access_token="fake-token",
+        sync_mode=True,
+    )
+
+    yield exp
+
+    for p in patches:
+        p.stop()
 
 
 class TestSyncMode:
