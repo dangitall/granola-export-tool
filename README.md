@@ -14,7 +14,9 @@ Extract your meetings, transcripts, and notes in multiple formats for backup, mi
 
 - **Direct API Access**
   - Export directly from Granola's servers
-  - Includes shared documents not in local cache
+  - Discovers shared documents from API, local cache, and navigation history
+  - Falls back to web scraping for link-shared documents the API can't return
+  - Incremental sync mode (`--sync`) to only download new/changed meetings
   - Fetches transcripts, workspaces, folders, and contacts
   - Auto-detects API token from local Granola installation
 
@@ -199,7 +201,8 @@ granola-export api-export [OPTIONS]
 | `--token` | API access token (default: auto-detect from local storage) |
 | `--workspace` | Filter by workspace ID |
 | `--no-transcripts` | Skip fetching transcripts |
-| `--no-shared` | Skip fetching shared documents from folders |
+| `--no-shared` | Skip fetching shared documents |
+| `--sync` | Incremental sync: only download new/changed meetings |
 
 **Examples:**
 
@@ -212,6 +215,9 @@ granola-export api-export --no-transcripts
 
 # Export to specific directory
 granola-export api-export -o ~/backup/granola-api
+
+# Incremental sync (only new/changed since last run)
+granola-export api-export --sync -o ~/granola
 
 # Export with explicit token
 granola-export api-export --token "your-api-token"
@@ -291,14 +297,14 @@ Granola stores data locally:
 
 | Platform | Path |
 |----------|------|
-| macOS | `~/Library/Application Support/Granola/cache-v3.json` |
-| Windows | `%APPDATA%\Granola\cache-v3.json` |
-| Linux | `~/.config/Granola/cache-v3.json` |
+| macOS | `~/Library/Application Support/Granola/cache-v6.json` |
+| Windows | `%APPDATA%\Granola\cache-v6.json` |
+| Linux | `~/.config/Granola/cache-v6.json` |
 
 Use `--cache-path` to specify a custom location:
 
 ```bash
-granola-export export --cache-path /path/to/cache-v3.json
+granola-export export --cache-path /path/to/cache-v6.json
 ```
 
 ## Python API
