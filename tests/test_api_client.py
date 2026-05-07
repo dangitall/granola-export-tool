@@ -302,3 +302,71 @@ class TestGetTokenFromLocal:
 
         assert config is not None
         assert config.access_token == "legacy-token"
+
+    def test_empty_access_token_string_falls_through(self, tmp_path):
+        """Treat access_token == '' as missing, not present."""
+        self._write_stored_accounts(tmp_path, "")
+        self._write_supabase(tmp_path, "legacy-token")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "legacy-token"
+
+    def test_accepts_unwrapped_accounts_and_tokens(self, tmp_path):
+        """If Granola ever stops double-encoding, the helper still works."""
+        accounts = [
+            {
+                "userId": "u1",
+                "email": "test@example.com",
+                # Plain dict, not a JSON-encoded string.
+                "tokens": {"access_token": "raw-token", "refresh_token": "raw-r"},
+            }
+        ]
+        # Plain list, not a JSON-encoded string either.
+        (tmp_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": accounts})
+        )
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "raw-token"
+        assert config.refresh_token == "raw-r"
+
+    def test_picks_most_recently_saved_account(self, tmp_path):
+        """With multiple accounts, the highest savedAt wins."""
+        accounts = [
+            {
+                "userId": "old",
+                "email": "old@example.com",
+                "tokens": json.dumps({"access_token": "old-token"}),
+                "savedAt": 1_000_000_000_000,
+            },
+            {
+                "userId": "new",
+                "email": "new@example.com",
+                "tokens": json.dumps({"access_token": "new-token"}),
+                "savedAt": 2_000_000_000_000,
+            },
+        ]
+        (tmp_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": json.dumps(accounts)})
+        )
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "new-token"
