@@ -41,6 +41,7 @@ def get_granola_data_dir() -> Path:
 # Well-known file names within the Granola data directory.
 CACHE_FILENAME = "cache-v6.json"
 TOKEN_FILENAME = "supabase.json"
+ACCOUNTS_FILENAME = "stored-accounts.json"
 
 
 def get_default_cache_path() -> Path:
@@ -49,5 +50,13 @@ def get_default_cache_path() -> Path:
 
 
 def get_token_path() -> Path:
-    """Return the full path to the Granola auth token file."""
+    """Return the full path to the legacy Granola auth token file."""
     return get_granola_data_dir() / TOKEN_FILENAME
+
+
+def get_accounts_path() -> Path:
+    """Return the full path to Granola's stored-accounts.json file.
+
+    Granola v7+ writes auth tokens here; older versions used supabase.json.
+    """
+    return get_granola_data_dir() / ACCOUNTS_FILENAME

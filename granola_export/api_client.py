@@ -18,7 +18,12 @@ from typing import Iterator, Optional
 import urllib.request
 import urllib.error
 
-from .paths import CACHE_FILENAME, get_granola_data_dir, get_token_path
+from .paths import (
+    CACHE_FILENAME,
+    get_accounts_path,
+    get_granola_data_dir,
+    get_token_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,43 +40,131 @@ class APIConfig:
     client_version: str = "5.354.0"
 
 
-def get_token_from_local() -> Optional[APIConfig]:
-    """
-    Extract API token from Granola's local storage.
+def _load_token_from_stored_accounts() -> Optional[APIConfig]:
+    """Read the active access token from Granola v7+ stored-accounts.json.
 
-    Returns:
-        APIConfig if token found, None otherwise.
+    The file is a JSON document like ``{"accounts": "<json string>"}``
+    where the inner value is a list of accounts. Each account has a
+    ``tokens`` field that is *also* a JSON-encoded string containing
+    ``access_token`` / ``refresh_token``. Both the outer ``accounts``
+    field and the inner ``tokens`` field may also be plain JSON values
+    (list / dict) — both forms are accepted.
+
+    When the file holds multiple accounts, the most-recently-saved one
+    (highest ``savedAt``) wins — Granola has no explicit active-account
+    marker, but the freshest entry is the safest heuristic.
+
+    Granola rewrites this file on every token refresh, so it stays fresh
+    while the legacy supabase.json does not.
+    """
+    accounts_path = get_accounts_path()
+    if not accounts_path.exists():
+        return None
+
+    try:
+        with open(accounts_path, "r") as f:
+            data = json.load(f)
+
+        accounts = data.get("accounts")
+        if isinstance(accounts, str):
+            accounts = json.loads(accounts)
+        if not accounts:
+            return None
+
+        valid_accounts = [a for a in accounts if isinstance(a, dict)]
+        if not valid_accounts:
+            return None
+        # Most-recently-saved account wins; missing savedAt sorts last.
+        account = max(valid_accounts, key=lambda a: a.get("savedAt") or 0)
+
+        tokens = account.get("tokens")
+        if isinstance(tokens, str):
+            tokens = json.loads(tokens)
+        if not isinstance(tokens, dict):
+            return None
+
+        access_token = tokens.get("access_token")
+        if not access_token:
+            return None
+
+        logger.debug(
+            "Using account %s (%d total in stored-accounts.json)",
+            account.get("email", "<unknown>"),
+            len(valid_accounts),
+        )
+        return APIConfig(
+            access_token=access_token,
+            refresh_token=tokens.get("refresh_token"),
+        )
+    except (
+        json.JSONDecodeError,
+        IOError,
+        KeyError,
+        IndexError,
+        TypeError,
+        AttributeError,
+    ) as e:
+        # Stay quiet here; the dispatcher emits a single user-facing
+        # warning if both this and the legacy path also fail.
+        logger.debug(f"Failed to read stored-accounts.json: {e}")
+        return None
+
+
+def _load_token_from_supabase() -> Optional[APIConfig]:
+    """Read the access token from the legacy supabase.json file.
+
+    Older Granola versions (pre-v7) wrote tokens here. The file is no
+    longer kept fresh on newer installs but is still useful as a fallback.
     """
     token_path = get_token_path()
-
     if not token_path.exists():
-        logger.warning(f"Token file not found at {token_path}")
         return None
 
     try:
         with open(token_path, "r") as f:
             data = json.load(f)
 
-        # Token is in workos_tokens.access_token
         # workos_tokens may be a JSON string or a dict
         workos = data.get("workos_tokens", {})
         if isinstance(workos, str):
             workos = json.loads(workos)
 
         access_token = workos.get("access_token")
-
         if not access_token:
-            logger.warning("No access_token found in supabase.json")
             return None
 
         return APIConfig(
             access_token=access_token,
             refresh_token=workos.get("refresh_token"),
         )
-
     except (json.JSONDecodeError, IOError) as e:
-        logger.error(f"Failed to read token file: {e}")
+        logger.debug(f"Failed to read supabase.json: {e}")
         return None
+
+
+def get_token_from_local() -> Optional[APIConfig]:
+    """
+    Extract API token from Granola's local storage.
+
+    Prefers the v7+ ``stored-accounts.json`` (kept fresh on every token
+    refresh) and falls back to the legacy ``supabase.json``.
+
+    Returns:
+        APIConfig if a token was found, None otherwise.
+    """
+    config = _load_token_from_stored_accounts()
+    if config:
+        return config
+
+    config = _load_token_from_supabase()
+    if config:
+        return config
+
+    logger.warning(
+        f"No Granola auth token found (checked {get_accounts_path()} "
+        f"and {get_token_path()}). Is Granola installed and signed in?"
+    )
+    return None
 
 
 def get_folder_ids_from_local_cache() -> list[str]:
