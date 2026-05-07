@@ -1,12 +1,17 @@
 """Tests for API client retry logic."""
 
+import json
 import urllib.error
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from granola_export.api_client import APIConfig, GranolaAPIClient
+from granola_export.api_client import (
+    APIConfig,
+    GranolaAPIClient,
+    get_token_from_local,
+)
 
 
 @pytest.fixture
@@ -188,3 +193,112 @@ class TestPaginationResilience:
                 list(client.get_all_documents(limit=2))
 
         assert exc_info.value.code == 401
+
+
+class TestGetTokenFromLocal:
+    """Token discovery across Granola v7+ and legacy storage formats."""
+
+    def _write_stored_accounts(self, dir_path, access_token, refresh_token=None):
+        """Write a v7-style stored-accounts.json into ``dir_path``."""
+        tokens = {"access_token": access_token}
+        if refresh_token is not None:
+            tokens["refresh_token"] = refresh_token
+        accounts = [
+            {
+                "userId": "u1",
+                "email": "test@example.com",
+                "tokens": json.dumps(tokens),
+            }
+        ]
+        (dir_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": json.dumps(accounts)})
+        )
+
+    def _write_supabase(self, dir_path, access_token, refresh_token=None):
+        """Write a legacy supabase.json into ``dir_path``."""
+        workos = {"access_token": access_token}
+        if refresh_token is not None:
+            workos["refresh_token"] = refresh_token
+        (dir_path / "supabase.json").write_text(
+            json.dumps({"workos_tokens": workos})
+        )
+
+    def test_reads_token_from_stored_accounts(self, tmp_path):
+        """v7+ format: token comes from stored-accounts.json."""
+        self._write_stored_accounts(tmp_path, "v7-token", "v7-refresh")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "v7-token"
+        assert config.refresh_token == "v7-refresh"
+
+    def test_prefers_stored_accounts_over_supabase(self, tmp_path):
+        """When both files exist, stored-accounts.json wins (it's fresher)."""
+        self._write_stored_accounts(tmp_path, "fresh-token")
+        self._write_supabase(tmp_path, "stale-token")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "fresh-token"
+
+    def test_falls_back_to_supabase_when_accounts_missing(self, tmp_path):
+        """Pre-v7 installs only have supabase.json — still supported."""
+        self._write_supabase(tmp_path, "legacy-token", "legacy-refresh")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "legacy-token"
+        assert config.refresh_token == "legacy-refresh"
+
+    def test_returns_none_when_no_files_exist(self, tmp_path):
+        """No token files at all -> None (caller decides what to do)."""
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            assert get_token_from_local() is None
+
+    def test_falls_back_when_stored_accounts_malformed(self, tmp_path):
+        """A malformed v7 file should not block reading the legacy file."""
+        (tmp_path / "stored-accounts.json").write_text("{not valid json")
+        self._write_supabase(tmp_path, "legacy-token")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "legacy-token"
+
+    def test_falls_back_when_stored_accounts_has_no_tokens(self, tmp_path):
+        """Empty accounts list in v7 file should fall through to legacy."""
+        (tmp_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": json.dumps([])})
+        )
+        self._write_supabase(tmp_path, "legacy-token")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "legacy-token"
