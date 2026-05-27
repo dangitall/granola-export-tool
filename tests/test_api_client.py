@@ -1,6 +1,8 @@
 """Tests for API client retry logic."""
 
+import base64
 import json
+import time
 import urllib.error
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -9,9 +11,23 @@ import pytest
 
 from granola_export.api_client import (
     APIConfig,
+    AuthRefreshError,
     GranolaAPIClient,
+    _is_jwt_expired,
     get_token_from_local,
+    refresh_access_token,
 )
+
+
+def _make_jwt(exp_offset_seconds: int) -> str:
+    """Build a fake JWT whose ``exp`` is ``now + exp_offset_seconds``.
+
+    Only the payload's ``exp`` claim matters for ``_is_jwt_expired``; the
+    header and signature can be arbitrary base64url-encoded bytes.
+    """
+    payload = json.dumps({"exp": int(time.time()) + exp_offset_seconds}).encode()
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    return f"header.{encoded}.signature"
 
 
 @pytest.fixture
@@ -370,3 +386,241 @@ class TestGetTokenFromLocal:
 
         assert config is not None
         assert config.access_token == "new-token"
+
+
+class TestIsJwtExpired:
+    """`_is_jwt_expired` is the gate that decides whether to refresh."""
+
+    def test_expired_jwt_returns_true(self):
+        """A JWT whose exp is in the past must be flagged as expired."""
+        assert _is_jwt_expired(_make_jwt(exp_offset_seconds=-3600)) is True
+
+    def test_fresh_jwt_returns_false(self):
+        """A JWT with an exp comfortably in the future is not expired."""
+        assert _is_jwt_expired(_make_jwt(exp_offset_seconds=3600)) is False
+
+    def test_jwt_within_margin_returns_true(self):
+        """An exp inside the safety margin (default 60s) is treated as expired.
+
+        This protects against refresh-token races and small clock skew when
+        the access token would otherwise expire mid-request.
+        """
+        assert _is_jwt_expired(_make_jwt(exp_offset_seconds=30)) is True
+
+    def test_non_jwt_token_returns_false(self):
+        """Unparseable tokens preserve current behavior: don't force a refresh.
+
+        Old supabase-format tokens were opaque strings rather than JWTs;
+        defaulting to "not expired" keeps those code paths working.
+        """
+        assert _is_jwt_expired("not-a-jwt") is False
+
+    def test_jwt_without_exp_claim_returns_false(self):
+        """A well-formed JWT missing the ``exp`` claim is treated as fresh.
+
+        We have no evidence of expiry, so refusing to refresh is the
+        conservative choice — the request will fail at use-time if the
+        token really is bad.
+        """
+        payload = base64.urlsafe_b64encode(b'{"sub":"x"}').rstrip(b"=").decode()
+        assert _is_jwt_expired(f"h.{payload}.s") is False
+
+
+class TestRefreshAccessToken:
+    """`refresh_access_token` calls Granola's `/v1/refresh-access-token`."""
+
+    def _refresh_response(self, **overrides) -> bytes:
+        """Build a realistic refresh-endpoint success payload."""
+        payload = {
+            "access_token": "fresh-access-token",
+            "refresh_token": "same-refresh-token",
+            "expires_in": 21599,
+            "token_type": "Bearer",
+            "obtained_at": int(time.time() * 1000),
+            "external_id": "external-id",
+            "session_id": "session_id",
+            "sign_in_method": "GoogleOAuth",
+        }
+        payload.update(overrides)
+        return json.dumps(payload).encode()
+
+    @patch("urllib.request.urlopen")
+    def test_success_returns_new_apiconfig(self, mock_urlopen):
+        """200 response yields an APIConfig with the new access_token."""
+        mock_urlopen.return_value = _make_response(self._refresh_response())
+
+        config = refresh_access_token("stale-refresh-token")
+
+        assert isinstance(config, APIConfig)
+        assert config.access_token == "fresh-access-token"
+        assert config.refresh_token == "same-refresh-token"
+
+    @patch("urllib.request.urlopen")
+    def test_posts_to_correct_endpoint_with_no_bearer(self, mock_urlopen):
+        """The refresh endpoint must be POSTed *without* an Authorization header.
+
+        Granola's request interceptor explicitly excludes this URL from the
+        bearer-injecting middleware; sending a Bearer token would be wrong
+        and may cause the server to reject the request.
+        """
+        mock_urlopen.return_value = _make_response(self._refresh_response())
+
+        refresh_access_token("a-refresh-token")
+
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://api.granola.ai/v1/refresh-access-token"
+        assert req.get_method() == "POST"
+        # urllib lowercases header names internally; check both forms.
+        assert "authorization" not in {k.lower() for k in req.headers}
+        assert json.loads(req.data) == {"refresh_token": "a-refresh-token"}
+
+    @patch("urllib.request.urlopen")
+    def test_logout_user_raises_auth_refresh_error(self, mock_urlopen):
+        """A 401 with body ``{"error": "logout_user"}`` means the refresh
+        token itself was revoked. The user must re-sign-in via Granola;
+        retrying won't help, so we raise a typed error.
+        """
+        err = _make_http_error(401)
+        err.fp = BytesIO(b'{"error":"logout_user"}')
+        mock_urlopen.side_effect = err
+
+        with pytest.raises(AuthRefreshError):
+            refresh_access_token("revoked-token")
+
+    @patch("urllib.request.urlopen")
+    def test_5xx_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """Transient server errors during refresh must surface as the
+        same typed exception the CLI already handles — not as a raw
+        urllib HTTPError, which would leak as a traceback from cron.
+        """
+        mock_urlopen.side_effect = _make_http_error(500)
+
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        # The original urllib error must be chained so logs can surface it.
+        assert isinstance(excinfo.value.__cause__, urllib.error.HTTPError)
+        assert excinfo.value.__cause__.code == 500
+
+    @patch("urllib.request.urlopen")
+    def test_network_error_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """URLError (DNS, connection refused, timeout) is wrapped too."""
+        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        assert isinstance(excinfo.value.__cause__, urllib.error.URLError)
+
+    @patch("urllib.request.urlopen")
+    def test_non_logout_401_wrapped_with_body_preserved(self, mock_urlopen):
+        """A 401 with a non-``logout_user`` body is wrapped, and the
+        original HTTPError remains inspectable (body preserved) for
+        diagnostic logging downstream.
+        """
+        err = _make_http_error(401)
+        err.fp = BytesIO(b'{"error":"some_other_code"}')
+        mock_urlopen.side_effect = err
+
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, urllib.error.HTTPError)
+        # If we forgot to restore the body, this would read as b"".
+        assert cause.fp.read() == b'{"error":"some_other_code"}'
+
+    @patch("urllib.request.urlopen")
+    def test_malformed_response_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """A 200 with no ``access_token`` is a protocol violation; wrap it."""
+        mock_urlopen.return_value = _make_response(b'{"unexpected": "shape"}')
+
+        with pytest.raises(AuthRefreshError):
+            refresh_access_token("any-token")
+
+
+class TestGetTokenFromLocalRefresh:
+    """`get_token_from_local` transparently refreshes expired access tokens."""
+
+    def _write_accounts(self, dir_path, access_token, refresh_token):
+        accounts = [
+            {
+                "userId": "u1",
+                "email": "test@example.com",
+                "tokens": json.dumps(
+                    {"access_token": access_token, "refresh_token": refresh_token}
+                ),
+            }
+        ]
+        (dir_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": json.dumps(accounts)})
+        )
+
+    def test_fresh_token_is_used_as_is(self, tmp_path):
+        """Don't hit the network when the cached access_token is still valid."""
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=3600), "r1")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ), patch(
+            "granola_export.api_client.refresh_access_token"
+        ) as mock_refresh:
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.refresh_token == "r1"
+        mock_refresh.assert_not_called()
+
+    def test_expired_token_triggers_refresh(self, tmp_path):
+        """The whole point of this change: stale JWT → refresh, return new config."""
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "r1")
+
+        refreshed = APIConfig(access_token="new-jwt", refresh_token="r1")
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ), patch(
+            "granola_export.api_client.refresh_access_token",
+            return_value=refreshed,
+        ) as mock_refresh:
+            config = get_token_from_local()
+
+        mock_refresh.assert_called_once_with("r1")
+        assert config is refreshed
+
+    def test_expired_token_without_refresh_token_returns_stale(self, tmp_path):
+        """If we have nothing to refresh with, return what we've got rather
+        than blow up here. The caller will see a 401 and surface it via the
+        existing AuthenticationError path — same behavior as before this fix.
+        """
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ), patch(
+            "granola_export.api_client.refresh_access_token"
+        ) as mock_refresh:
+            config = get_token_from_local()
+
+        mock_refresh.assert_not_called()
+        assert config is not None
+        # The stale access_token comes through unchanged.
+        assert config.access_token.startswith("header.")
+
+    def test_refresh_logout_user_propagates(self, tmp_path):
+        """If the refresh_token itself is revoked, propagate AuthRefreshError
+        so the CLI can tell the user to re-sign-in via Granola.
+        """
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "r1")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ), patch(
+            "granola_export.api_client.refresh_access_token",
+            side_effect=AuthRefreshError("sign-in expired"),
+        ):
+            with pytest.raises(AuthRefreshError):
+                get_token_from_local()

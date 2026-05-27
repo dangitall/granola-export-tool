@@ -514,12 +514,27 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         print_header("Granola API Export")
 
     from .exporters.api_exporter import APIExporter
-    from .api_client import get_token_from_local
+    from .api_client import AuthRefreshError, get_token_from_local
+
+    def _handle_refresh_error(e: AuthRefreshError) -> int:
+        """Translate a refresh failure into a clean CLI exit.
+
+        The ``revoked`` branch is unrecoverable from this side — the
+        error message already tells the user to re-sign-in. Everything
+        else (5xx, network blip, malformed body) is worth retrying.
+        """
+        print_error(str(e))
+        if not e.revoked:
+            print_hint("Transient refresh failure — try again in a moment")
+        return 1
 
     # Check for token
     if not args.token:
-        with Spinner("Checking for API token"):
-            config = get_token_from_local()
+        try:
+            with Spinner("Checking for API token"):
+                config = get_token_from_local()
+        except AuthRefreshError as e:
+            return _handle_refresh_error(e)
         if not config:
             print_error("No API token found")
             print_hint("Make sure Granola is installed and you're logged in")
@@ -546,6 +561,8 @@ def cmd_api_export(args: argparse.Namespace) -> int:
     except ValueError as e:
         print_error(str(e))
         return 1
+    except AuthRefreshError as e:
+        return _handle_refresh_error(e)
 
     # Test connection
     with Spinner("Testing API connection"):
