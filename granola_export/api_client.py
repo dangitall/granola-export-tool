@@ -10,6 +10,7 @@ Fetches data from Granola's API endpoints, useful for:
 import base64
 import binascii
 import gzip
+import io
 import json
 import logging
 import re
@@ -36,12 +37,22 @@ REFRESH_TOKEN_URL = "https://api.granola.ai/v1/refresh-access-token"
 
 
 class AuthRefreshError(Exception):
-    """The refresh token itself is no longer accepted.
+    """Raised when refreshing the access_token fails.
 
-    Raised when the server replies 401 with ``{"error": "logout_user"}``.
-    The only remedy is for the user to sign in again via the Granola app;
-    further retries from this tool will not succeed.
+    Covers all failure modes of the refresh exchange — revoked
+    refresh_token (the only unrecoverable case), transient server
+    errors, network failures, malformed responses — so callers can
+    handle "I couldn't get a fresh token" with a single catch.
+
+    ``revoked`` distinguishes the unrecoverable case: the server told
+    us the refresh_token has been invalidated and the user must
+    re-sign-in via the Granola app. For all other cases (5xx, DNS,
+    timeout, garbage response) a retry on the next run is reasonable.
     """
+
+    def __init__(self, message: str, *, revoked: bool = False):
+        super().__init__(message)
+        self.revoked = revoked
 
 
 @dataclass
@@ -94,12 +105,11 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
     endpoint is excluded from the bearer-injecting interceptor).
 
     Raises:
-        AuthRefreshError: the refresh_token has been revoked (server
-            responded 401 with ``error: logout_user``). The user must
-            re-sign-in via the Granola app.
-        urllib.error.HTTPError: any other non-2xx response; lets the
-            caller decide whether to retry.
-        urllib.error.URLError: network failure.
+        AuthRefreshError: any failure of the refresh exchange. The
+            ``revoked`` attribute is True only when the refresh_token
+            itself was rejected (server returned ``error: logout_user``);
+            all other failures (5xx, network errors, malformed body)
+            chain the original cause via ``__cause__``.
     """
     body = json.dumps({"refresh_token": refresh_token}).encode("utf-8")
     # Standard client headers, sans Authorization. The server identifies the
@@ -121,23 +131,32 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
                 raw = gzip.decompress(raw)
             payload = json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as e:
-        # Only the logout_user signal is worth a distinct exception; everything
-        # else (transient 5xx, network blips) flows through the standard path.
         if e.code == 401 and e.fp is not None:
+            body_bytes = e.fp.read()
+            # We consumed e.fp to classify the error; restore it so any
+            # caller that inspects the chained __cause__ still sees the body.
+            e.fp = io.BytesIO(body_bytes)
             try:
-                err_payload = json.loads(e.fp.read().decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+                err_payload = json.loads(body_bytes.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 err_payload = None
             if isinstance(err_payload, dict) and err_payload.get("error") == "logout_user":
                 raise AuthRefreshError(
                     "Granola sign-in expired — open the Granola app "
-                    "and sign in again."
+                    "and sign in again.",
+                    revoked=True,
                 ) from e
-        raise
+        raise AuthRefreshError(
+            f"Could not refresh Granola access token (HTTP {e.code})"
+        ) from e
+    except urllib.error.URLError as e:
+        raise AuthRefreshError(
+            f"Could not refresh Granola access token: {e.reason}"
+        ) from e
 
     new_access = payload.get("access_token")
     if not new_access:
-        raise urllib.error.URLError(
+        raise AuthRefreshError(
             "refresh-access-token response missing access_token"
         )
     return APIConfig(

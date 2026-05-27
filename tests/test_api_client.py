@@ -488,14 +488,54 @@ class TestRefreshAccessToken:
             refresh_access_token("revoked-token")
 
     @patch("urllib.request.urlopen")
-    def test_other_http_error_propagates(self, mock_urlopen):
-        """Non-logout_user errors propagate as HTTPError so the existing
-        retry/error-handling machinery can decide what to do (5xx retry,
-        401 surfaces as auth failure, etc.).
+    def test_5xx_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """Transient server errors during refresh must surface as the
+        same typed exception the CLI already handles — not as a raw
+        urllib HTTPError, which would leak as a traceback from cron.
         """
         mock_urlopen.side_effect = _make_http_error(500)
 
-        with pytest.raises(urllib.error.HTTPError):
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        # The original urllib error must be chained so logs can surface it.
+        assert isinstance(excinfo.value.__cause__, urllib.error.HTTPError)
+        assert excinfo.value.__cause__.code == 500
+
+    @patch("urllib.request.urlopen")
+    def test_network_error_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """URLError (DNS, connection refused, timeout) is wrapped too."""
+        mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        assert isinstance(excinfo.value.__cause__, urllib.error.URLError)
+
+    @patch("urllib.request.urlopen")
+    def test_non_logout_401_wrapped_with_body_preserved(self, mock_urlopen):
+        """A 401 with a non-``logout_user`` body is wrapped, and the
+        original HTTPError remains inspectable (body preserved) for
+        diagnostic logging downstream.
+        """
+        err = _make_http_error(401)
+        err.fp = BytesIO(b'{"error":"some_other_code"}')
+        mock_urlopen.side_effect = err
+
+        with pytest.raises(AuthRefreshError) as excinfo:
+            refresh_access_token("any-token")
+
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, urllib.error.HTTPError)
+        # If we forgot to restore the body, this would read as b"".
+        assert cause.fp.read() == b'{"error":"some_other_code"}'
+
+    @patch("urllib.request.urlopen")
+    def test_malformed_response_wrapped_in_auth_refresh_error(self, mock_urlopen):
+        """A 200 with no ``access_token`` is a protocol violation; wrap it."""
+        mock_urlopen.return_value = _make_response(b'{"unexpected": "shape"}')
+
+        with pytest.raises(AuthRefreshError):
             refresh_access_token("any-token")
 
 
