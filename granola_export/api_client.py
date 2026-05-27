@@ -7,6 +7,8 @@ Fetches data from Granola's API endpoints, useful for:
 - Fresh data without waiting for cache sync
 """
 
+import base64
+import binascii
 import gzip
 import json
 import logging
@@ -27,6 +29,20 @@ from .paths import (
 
 logger = logging.getLogger(__name__)
 
+# Endpoint Granola's app uses to mint a new access_token from a refresh_token.
+# It is intentionally excluded from the bearer-injecting request interceptor —
+# the body's refresh_token is the only credential.
+REFRESH_TOKEN_URL = "https://api.granola.ai/v1/refresh-access-token"
+
+
+class AuthRefreshError(Exception):
+    """The refresh token itself is no longer accepted.
+
+    Raised when the server replies 401 with ``{"error": "logout_user"}``.
+    The only remedy is for the user to sign in again via the Granola app;
+    further retries from this tool will not succeed.
+    """
+
 
 @dataclass
 class APIConfig:
@@ -38,6 +54,98 @@ class APIConfig:
     base_url: str = "https://api.granola.ai"
     user_agent: str = "Granola/5.354.0"
     client_version: str = "5.354.0"
+
+
+def _is_jwt_expired(token: str, margin_seconds: int = 60) -> bool:
+    """Return True if ``token`` is a JWT whose ``exp`` is at or near the past.
+
+    The margin protects against the access_token expiring mid-request — if
+    we'd be using it within ``margin_seconds`` of its deadline, we'd rather
+    refresh now than 401 halfway through a run.
+
+    Unparseable tokens and JWTs without an ``exp`` claim return False:
+    that preserves prior behavior for opaque/legacy tokens, at the cost of
+    not pre-empting their expiry. Those cases still surface as 401 at
+    use-time via the existing error path.
+    """
+    parts = token.split(".")
+    if len(parts) < 2:
+        return False
+    try:
+        payload_b64 = parts[1]
+        padding = "=" * (-len(payload_b64) % 4)
+        payload = json.loads(
+            base64.urlsafe_b64decode(payload_b64 + padding).decode("utf-8")
+        )
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return False
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False
+    return exp <= time.time() + margin_seconds
+
+
+def refresh_access_token(refresh_token: str) -> APIConfig:
+    """Exchange a refresh_token for a fresh access_token.
+
+    Mirrors what the Granola Electron app does in
+    ``nodeRefreshWorkOsAccessToken``: POST the refresh_token to
+    ``/v1/refresh-access-token`` with no Authorization header (the
+    endpoint is excluded from the bearer-injecting interceptor).
+
+    Raises:
+        AuthRefreshError: the refresh_token has been revoked (server
+            responded 401 with ``error: logout_user``). The user must
+            re-sign-in via the Granola app.
+        urllib.error.HTTPError: any other non-2xx response; lets the
+            caller decide whether to retry.
+        urllib.error.URLError: network failure.
+    """
+    body = json.dumps({"refresh_token": refresh_token}).encode("utf-8")
+    # Standard client headers, sans Authorization. The server identifies the
+    # session via the refresh_token, not a bearer.
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "*/*",
+        "User-Agent": "Granola/5.354.0",
+        "X-Client-Version": "5.354.0",
+        "X-Granola-Platform": "darwin",
+    }
+    req = urllib.request.Request(
+        REFRESH_TOKEN_URL, data=body, headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read()
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            payload = json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        # Only the logout_user signal is worth a distinct exception; everything
+        # else (transient 5xx, network blips) flows through the standard path.
+        if e.code == 401 and e.fp is not None:
+            try:
+                err_payload = json.loads(e.fp.read().decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+                err_payload = None
+            if isinstance(err_payload, dict) and err_payload.get("error") == "logout_user":
+                raise AuthRefreshError(
+                    "Granola sign-in expired — open the Granola app "
+                    "and sign in again."
+                ) from e
+        raise
+
+    new_access = payload.get("access_token")
+    if not new_access:
+        raise urllib.error.URLError(
+            "refresh-access-token response missing access_token"
+        )
+    return APIConfig(
+        access_token=new_access,
+        # Granola does not rotate refresh tokens today, but the server is
+        # free to return a new one — prefer whatever it sent us.
+        refresh_token=payload.get("refresh_token") or refresh_token,
+    )
 
 
 def _load_token_from_stored_accounts() -> Optional[APIConfig]:
@@ -146,25 +254,38 @@ def get_token_from_local() -> Optional[APIConfig]:
     """
     Extract API token from Granola's local storage.
 
-    Prefers the v7+ ``stored-accounts.json`` (kept fresh on every token
-    refresh) and falls back to the legacy ``supabase.json``.
+    Prefers the v7+ ``stored-accounts.json`` and falls back to the legacy
+    ``supabase.json``. If the access_token is an expired JWT and a
+    refresh_token is available, transparently exchanges it for a fresh
+    access_token via Granola's refresh endpoint.
+
+    Why this matters: recent Granola releases write tokens only to the
+    encrypted ``stored-accounts.json.enc``; the plaintext mirror we read
+    here is no longer kept fresh. The plaintext refresh_token is still
+    valid (Granola doesn't rotate refresh tokens), so we can exchange
+    it for a current access_token without touching the encrypted file.
 
     Returns:
         APIConfig if a token was found, None otherwise.
+
+    Raises:
+        AuthRefreshError: if the refresh_token itself was revoked.
     """
-    config = _load_token_from_stored_accounts()
-    if config:
-        return config
+    config = _load_token_from_stored_accounts() or _load_token_from_supabase()
+    if not config:
+        logger.warning(
+            f"No Granola auth token found (checked {get_accounts_path()} "
+            f"and {get_token_path()}). Is Granola installed and signed in?"
+        )
+        return None
 
-    config = _load_token_from_supabase()
-    if config:
-        return config
+    if _is_jwt_expired(config.access_token) and config.refresh_token:
+        logger.info(
+            "Cached access token expired; refreshing via Granola endpoint"
+        )
+        return refresh_access_token(config.refresh_token)
 
-    logger.warning(
-        f"No Granola auth token found (checked {get_accounts_path()} "
-        f"and {get_token_path()}). Is Granola installed and signed in?"
-    )
-    return None
+    return config
 
 
 def get_folder_ids_from_local_cache() -> list[str]:

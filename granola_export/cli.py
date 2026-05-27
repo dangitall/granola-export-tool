@@ -514,12 +514,16 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         print_header("Granola API Export")
 
     from .exporters.api_exporter import APIExporter
-    from .api_client import get_token_from_local
+    from .api_client import AuthRefreshError, get_token_from_local
 
     # Check for token
     if not args.token:
-        with Spinner("Checking for API token"):
-            config = get_token_from_local()
+        try:
+            with Spinner("Checking for API token"):
+                config = get_token_from_local()
+        except AuthRefreshError as e:
+            print_error(str(e))
+            return 1
         if not config:
             print_error("No API token found")
             print_hint("Make sure Granola is installed and you're logged in")
@@ -544,6 +548,10 @@ def cmd_api_export(args: argparse.Namespace) -> int:
             sync_mode=args.sync,
         )
     except ValueError as e:
+        print_error(str(e))
+        return 1
+    except AuthRefreshError as e:
+        # The cached refresh_token was rejected — only the user can recover.
         print_error(str(e))
         return 1
 
