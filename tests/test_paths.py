@@ -58,6 +58,38 @@ class TestDerivedPaths:
         assert "AppData" in str(cache_path)
 
 
+class TestConfigDir:
+    """This tool's own config dir, independent of Granola's data dir."""
+
+    def test_env_override_wins(self, monkeypatch, tmp_path):
+        from granola_export.paths import (
+            CONFIG_DIR_ENV,
+            get_config_dir,
+            get_credentials_path,
+        )
+
+        monkeypatch.setenv(CONFIG_DIR_ENV, str(tmp_path / "custom"))
+        assert get_config_dir() == tmp_path / "custom"
+        assert get_credentials_path() == tmp_path / "custom" / "credentials.json"
+
+    def test_xdg_config_home_used(self, monkeypatch, tmp_path):
+        from granola_export.paths import CONFIG_DIR_ENV, get_config_dir
+
+        monkeypatch.delenv(CONFIG_DIR_ENV, raising=False)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        assert get_config_dir() == tmp_path / "xdg" / "granola-export"
+
+    def test_default_when_no_env(self, monkeypatch):
+        from granola_export.paths import CONFIG_DIR_ENV, get_config_dir
+
+        monkeypatch.delenv(CONFIG_DIR_ENV, raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setattr(
+            "granola_export.paths.platform.system", lambda: "Darwin"
+        )
+        assert get_config_dir().parts[-2:] == (".config", "granola-export")
+
+
 class TestBackwardCompatReExport:
     """Guard against accidental removal of the re-export from cache.py."""
 
