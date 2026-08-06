@@ -485,6 +485,20 @@ class TestPersistedCredentialStore:
         ):
             assert get_token_from_local() is None
 
+    def test_corrupt_store_falls_through_to_none(
+        self, tmp_path, isolated_config_dir
+    ):
+        """A garbage credentials.json must not crash discovery."""
+        creds = isolated_config_dir / "credentials.json"
+        creds.parent.mkdir(parents=True, exist_ok=True)
+        creds.write_text("{ not valid json")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,  # no Granola files either
+        ):
+            assert get_token_from_local() is None
+
     @pytest.mark.skipif(
         os.name == "nt", reason="POSIX file permissions not meaningful on Windows"
     )

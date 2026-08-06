@@ -22,7 +22,6 @@ import urllib.request
 import urllib.error
 
 import os
-import stat
 
 from .paths import (
     CACHE_FILENAME,
@@ -304,31 +303,42 @@ def _persist_credentials(config: APIConfig) -> None:
     """Best-effort write of the current refresh/access token to our own store.
 
     Persisting the refresh_token is what lets exports keep working after
-    Granola stops writing plaintext credentials. Written with 0600 perms
-    since it holds a long-lived secret. Failures are logged, not raised —
-    an unwritable config dir must not break an otherwise-working export.
+    Granola stops writing plaintext credentials. Failures are logged, not
+    raised — an unwritable config dir must not break an otherwise-working
+    export.
+
+    The refresh_token is a long-lived, full-account credential, so on POSIX
+    we create the file 0600 (owner read/write only) via ``os.open`` and
+    finalize with ``os.replace`` — the destination is never world-readable
+    and never left truncated. On Windows the mode bits are largely ignored;
+    the file's protection there derives from the per-user ``%APPDATA%``
+    directory ACLs, not from this call.
     """
     if not config.refresh_token:
         return
     creds_path = get_credentials_path()
+    # Per-process temp name so overlapping runs can't clobber each other's
+    # partial write (os.replace of the final file is still atomic regardless).
+    tmp_path = creds_path.with_suffix(creds_path.suffix + f".{os.getpid()}.tmp")
     try:
         creds_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "refresh_token": config.refresh_token,
             "access_token": config.access_token,
         }
-        # Write-and-replace so a crash mid-write can't truncate the store.
-        tmp_path = creds_path.with_suffix(creds_path.suffix + ".tmp")
         with open(
             os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
             "w",
         ) as f:
             json.dump(payload, f)
         os.replace(tmp_path, creds_path)
-        # Tighten perms in case the file pre-existed with looser bits.
-        os.chmod(creds_path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError as e:
         logger.debug(f"Could not persist credentials to {creds_path}: {e}")
+        # Don't leave a stray temp file behind on a failed write.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def get_token_from_local() -> Optional[APIConfig]:
