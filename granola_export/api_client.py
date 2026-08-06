@@ -21,9 +21,13 @@ from typing import Iterator, Optional
 import urllib.request
 import urllib.error
 
+import os
+import stat
+
 from .paths import (
     CACHE_FILENAME,
     get_accounts_path,
+    get_credentials_path,
     get_granola_data_dir,
     get_token_path,
 )
@@ -269,20 +273,84 @@ def _load_token_from_supabase() -> Optional[APIConfig]:
         return None
 
 
+def _load_persisted_credentials() -> Optional[APIConfig]:
+    """Read credentials from *our own* persisted store (see paths.get_config_dir).
+
+    This is the fallback for when Granola no longer writes any plaintext
+    token file. The store holds at minimum a ``refresh_token``; the
+    ``access_token`` may be absent or stale — callers refresh as needed.
+    """
+    creds_path = get_credentials_path()
+    if not creds_path.exists():
+        return None
+
+    try:
+        with open(creds_path, "r") as f:
+            data = json.load(f)
+        refresh_token = data.get("refresh_token")
+        if not refresh_token:
+            return None
+        return APIConfig(
+            # access_token may be missing/stale; "" forces a refresh below.
+            access_token=data.get("access_token") or "",
+            refresh_token=refresh_token,
+        )
+    except (json.JSONDecodeError, IOError, TypeError) as e:
+        logger.debug(f"Failed to read persisted credentials: {e}")
+        return None
+
+
+def _persist_credentials(config: APIConfig) -> None:
+    """Best-effort write of the current refresh/access token to our own store.
+
+    Persisting the refresh_token is what lets exports keep working after
+    Granola stops writing plaintext credentials. Written with 0600 perms
+    since it holds a long-lived secret. Failures are logged, not raised —
+    an unwritable config dir must not break an otherwise-working export.
+    """
+    if not config.refresh_token:
+        return
+    creds_path = get_credentials_path()
+    try:
+        creds_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "refresh_token": config.refresh_token,
+            "access_token": config.access_token,
+        }
+        # Write-and-replace so a crash mid-write can't truncate the store.
+        tmp_path = creds_path.with_suffix(creds_path.suffix + ".tmp")
+        with open(
+            os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
+            "w",
+        ) as f:
+            json.dump(payload, f)
+        os.replace(tmp_path, creds_path)
+        # Tighten perms in case the file pre-existed with looser bits.
+        os.chmod(creds_path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError as e:
+        logger.debug(f"Could not persist credentials to {creds_path}: {e}")
+
+
 def get_token_from_local() -> Optional[APIConfig]:
     """
-    Extract API token from Granola's local storage.
+    Obtain an API token, preferring Granola's local storage.
 
-    Prefers the v7+ ``stored-accounts.json`` and falls back to the legacy
-    ``supabase.json``. If the access_token is an expired JWT and a
-    refresh_token is available, transparently exchanges it for a fresh
-    access_token via Granola's refresh endpoint.
+    Order of preference:
+      1. Granola's v7+ ``stored-accounts.json`` (freshest when present).
+      2. The legacy ``supabase.json``.
+      3. Our own persisted credential store (``get_credentials_path()``).
+
+    Whenever we read a refresh_token from Granola's files, we mirror it
+    into our own store so future runs survive Granola encrypting/removing
+    those files. If the access_token is missing or an expired JWT and a
+    refresh_token is available, we exchange it for a fresh access_token via
+    Granola's refresh endpoint and persist the result.
 
     Why this matters: recent Granola releases write tokens only to the
-    encrypted ``stored-accounts.json.enc``; the plaintext mirror we read
-    here is no longer kept fresh. The plaintext refresh_token is still
-    valid (Granola doesn't rotate refresh tokens), so we can exchange
-    it for a current access_token without touching the encrypted file.
+    encrypted ``stored-accounts.json.enc``, whose key lives in a
+    data-protection keychain we cannot read. The refresh_token is not
+    rotated, so once we've captured one we can keep minting access tokens
+    indefinitely without touching Granola's files.
 
     Returns:
         APIConfig if a token was found, None otherwise.
@@ -291,18 +359,34 @@ def get_token_from_local() -> Optional[APIConfig]:
         AuthRefreshError: if the refresh_token itself was revoked.
     """
     config = _load_token_from_stored_accounts() or _load_token_from_supabase()
+    from_granola = config is not None
+
+    if not config:
+        config = _load_persisted_credentials()
+
     if not config:
         logger.warning(
-            f"No Granola auth token found (checked {get_accounts_path()} "
-            f"and {get_token_path()}). Is Granola installed and signed in?"
+            f"No Granola auth token found (checked {get_accounts_path()}, "
+            f"{get_token_path()}, and {get_credentials_path()}). "
+            "Is Granola installed and signed in? If Granola no longer writes "
+            "plaintext tokens, seed one with: granola-export auth --refresh-token <token>"
         )
         return None
 
-    if _is_jwt_expired(config.access_token) and config.refresh_token:
+    # Mirror a freshly-read Granola refresh_token into our own store so we
+    # keep working once Granola stops writing these files.
+    if from_granola and config.refresh_token:
+        _persist_credentials(config)
+
+    needs_refresh = bool(config.refresh_token) and (
+        not config.access_token or _is_jwt_expired(config.access_token)
+    )
+    if needs_refresh:
         logger.info(
             "Cached access token expired; refreshing via Granola endpoint"
         )
-        return refresh_access_token(config.refresh_token)
+        config = refresh_access_token(config.refresh_token)
+        _persist_credentials(config)
 
     return config
 

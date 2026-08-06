@@ -2,6 +2,8 @@
 
 import base64
 import json
+import os
+import stat
 import time
 import urllib.error
 from io import BytesIO
@@ -386,6 +388,115 @@ class TestGetTokenFromLocal:
 
         assert config is not None
         assert config.access_token == "new-token"
+
+
+class TestPersistedCredentialStore:
+    """The tool's own credential store: fallback + write-back behavior.
+
+    Granola now writes tokens only to encrypted files whose key we cannot
+    read, so we mirror any refresh_token we do see into our own store and
+    fall back to it when Granola's plaintext files are gone.
+    """
+
+    def _write_stored_accounts(self, dir_path, access_token, refresh_token=None):
+        tokens = {"access_token": access_token}
+        if refresh_token is not None:
+            tokens["refresh_token"] = refresh_token
+        accounts = [{"userId": "u1", "tokens": json.dumps(tokens)}]
+        (dir_path / "stored-accounts.json").write_text(
+            json.dumps({"accounts": json.dumps(accounts)})
+        )
+
+    def test_falls_back_to_persisted_store(self, tmp_path, isolated_config_dir):
+        """No Granola files, but our store has a fresh token -> use it."""
+        creds = isolated_config_dir / "credentials.json"
+        creds.parent.mkdir(parents=True, exist_ok=True)
+        creds.write_text(
+            json.dumps(
+                {
+                    "access_token": _make_jwt(3600),  # still valid
+                    "refresh_token": "persisted-refresh",
+                }
+            )
+        )
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,  # empty -> no Granola token files
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.refresh_token == "persisted-refresh"
+
+    def test_reading_granola_token_writes_back_to_store(
+        self, tmp_path, isolated_config_dir
+    ):
+        """A refresh_token read from Granola is mirrored into our store."""
+        self._write_stored_accounts(tmp_path, _make_jwt(3600), "granola-refresh")
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            get_token_from_local()
+
+        creds = isolated_config_dir / "credentials.json"
+        assert creds.exists()
+        stored = json.loads(creds.read_text())
+        assert stored["refresh_token"] == "granola-refresh"
+
+    @patch("urllib.request.urlopen")
+    def test_persisted_only_refresh_triggers_refresh(
+        self, mock_urlopen, tmp_path, isolated_config_dir
+    ):
+        """Store with a refresh_token but no access_token refreshes on read."""
+        mock_urlopen.return_value = _make_response(
+            json.dumps(
+                {
+                    "access_token": "minted-access",
+                    "refresh_token": "persisted-refresh",
+                }
+            ).encode()
+        )
+        creds = isolated_config_dir / "credentials.json"
+        creds.parent.mkdir(parents=True, exist_ok=True)
+        creds.write_text(json.dumps({"refresh_token": "persisted-refresh"}))
+
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            config = get_token_from_local()
+
+        assert config is not None
+        assert config.access_token == "minted-access"
+        # Refreshed result is written back so subsequent runs stay warm.
+        stored = json.loads(creds.read_text())
+        assert stored["access_token"] == "minted-access"
+
+    def test_returns_none_when_no_files_and_no_store(
+        self, tmp_path, isolated_config_dir
+    ):
+        """Nothing anywhere -> None, and the warning names our store path."""
+        with patch(
+            "granola_export.paths.get_granola_data_dir",
+            return_value=tmp_path,
+        ):
+            assert get_token_from_local() is None
+
+    @pytest.mark.skipif(
+        os.name == "nt", reason="POSIX file permissions not meaningful on Windows"
+    )
+    def test_store_written_with_owner_only_perms(self, isolated_config_dir):
+        """The credential file holds a long-lived secret -> 0600."""
+        from granola_export.api_client import _persist_credentials
+
+        _persist_credentials(APIConfig(access_token="a", refresh_token="r"))
+
+        creds = isolated_config_dir / "credentials.json"
+        assert creds.exists()
+        assert stat.S_IMODE(creds.stat().st_mode) == 0o600
 
 
 class TestIsJwtExpired:
