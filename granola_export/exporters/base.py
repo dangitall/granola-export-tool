@@ -5,13 +5,12 @@ Base exporter class defining the export interface.
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
 
 from ..cache import GranolaCache
 from ..models import ExportResult
 
 
-def safe_filename(name: Optional[str], max_length: int = 50) -> str:
+def safe_filename(name: str | None, max_length: int = 50) -> str:
     """
     Convert a string to a filesystem-safe filename.
 

@@ -1,6 +1,5 @@
 """Tests for API exporter error handling."""
 
-import json
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -30,9 +29,7 @@ def _make_http_error(code: int) -> urllib.error.HTTPError:
 def exporter(tmp_path):
     """Create an APIExporter with a mocked client."""
     patches = [
-        patch(
-            "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
-        ),
+        patch("granola_export.exporters.api_exporter.GranolaAPIClient.from_token"),
         patch(
             "granola_export.exporters.api_exporter.get_shared_doc_ids_from_local_cache",
             return_value=[],
@@ -220,9 +217,7 @@ class TestSuccessfulExport:
 def sync_exporter(tmp_path):
     """Create an APIExporter in sync mode with a mocked client."""
     patches = [
-        patch(
-            "granola_export.exporters.api_exporter.GranolaAPIClient.from_token"
-        ),
+        patch("granola_export.exporters.api_exporter.GranolaAPIClient.from_token"),
         patch(
             "granola_export.exporters.api_exporter.get_shared_doc_ids_from_local_cache",
             return_value=[],
@@ -311,7 +306,11 @@ class TestSyncMode:
 
         # Second sync with updated timestamp
         docs_v2 = [
-            {"id": "doc-1", "title": "Meeting 1 (edited)", "updated_at": "2025-01-15T00:00:00Z"},
+            {
+                "id": "doc-1",
+                "title": "Meeting 1 (edited)",
+                "updated_at": "2025-01-15T00:00:00Z",
+            },
         ]
         sync_exporter.client.get_all_documents.return_value = iter(docs_v2)
         result = sync_exporter.export()

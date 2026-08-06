@@ -1,15 +1,12 @@
 """Tests for data models."""
 
-import pytest
-from datetime import datetime
-
 from granola_export.models import (
     Document,
+    Meeting,
+    Panel,
+    Person,
     Transcript,
     TranscriptSegment,
-    Panel,
-    Meeting,
-    Person,
 )
 
 
@@ -53,7 +50,6 @@ class TestTranscriptSegment:
         assert segment.end_time == 2.0
         assert segment.speaker == "John"
         assert segment.confidence == 0.95
-
 
     def test_from_dict_with_iso_timestamps(self):
         """ISO timestamp strings should be parsed, not silently zeroed."""
@@ -104,8 +100,16 @@ class TestTranscript:
         """duration_seconds should be relative even with absolute ISO timestamps."""
         data = {
             "segments": [
-                {"text": "Hello", "startTime": "2024-06-15T10:00:00Z", "endTime": "2024-06-15T10:00:03Z"},
-                {"text": "World", "startTime": "2024-06-15T10:00:03Z", "endTime": "2024-06-15T10:00:10Z"},
+                {
+                    "text": "Hello",
+                    "startTime": "2024-06-15T10:00:00Z",
+                    "endTime": "2024-06-15T10:00:03Z",
+                },
+                {
+                    "text": "World",
+                    "startTime": "2024-06-15T10:00:03Z",
+                    "endTime": "2024-06-15T10:00:10Z",
+                },
             ],
         }
         transcript = Transcript.from_dict("doc-iso", data)
@@ -210,7 +214,9 @@ class TestMeeting:
             "doc-123",
             {"text": "Hello world", "segments": []},
         )
-        meeting = Meeting(document=doc, transcript=transcript, metadata={"key": "value"})
+        meeting = Meeting(
+            document=doc, transcript=transcript, metadata={"key": "value"}
+        )
         result = meeting.to_dict()
 
         assert result["id"] == "doc-123"

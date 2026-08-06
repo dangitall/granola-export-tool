@@ -11,18 +11,16 @@ import time
 import urllib.error
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from .base import Exporter, safe_filename
 from ..api_client import (
     GranolaAPIClient,
     get_folder_ids_from_local_cache,
     get_owned_doc_ids_from_local_cache,
     get_shared_doc_ids_from_local_cache,
     get_viewed_meeting_ids_from_leveldb,
-    get_token_from_local,
 )
 from ..models import ExportResult
+from .base import Exporter, safe_filename
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +52,10 @@ class APIExporter(Exporter):
     def __init__(
         self,
         output_dir: Path,
-        access_token: Optional[str] = None,
+        access_token: str | None = None,
         include_transcripts: bool = True,
         include_shared: bool = True,
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
         sync_mode: bool = False,
     ):
         """
@@ -103,23 +101,21 @@ class APIExporter(Exporter):
             return {}
 
         try:
-            with open(manifest_path, "r") as f:
+            with open(manifest_path) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Could not load previous manifest: {e}")
             return {}
 
     @staticmethod
-    def _parse_timestamp(value: str) -> Optional[datetime]:
+    def _parse_timestamp(value: str) -> datetime | None:
         """Parse an ISO 8601 timestamp string, returning None on failure."""
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except (ValueError, TypeError):
             return None
 
-    def _is_document_changed(
-        self, doc: dict, previous_docs: dict
-    ) -> tuple[bool, str]:
+    def _is_document_changed(self, doc: dict, previous_docs: dict) -> tuple[bool, str]:
         """
         Check if a document has changed since the last export.
 
@@ -168,7 +164,9 @@ class APIExporter(Exporter):
             previous_manifest = self._load_previous_manifest()
             previous_docs = previous_manifest.get("documents", {})
             if previous_docs:
-                logger.info(f"Sync mode: found {len(previous_docs)} previously exported documents")
+                logger.info(
+                    f"Sync mode: found {len(previous_docs)} previously exported documents"
+                )
             else:
                 logger.info("Sync mode: no previous export found, doing full export")
 
@@ -205,9 +203,7 @@ class APIExporter(Exporter):
         manifest_ids = set(previous_manifest.get("folder_ids", []))
         deleted_folder_ids = set(previous_manifest.get("deleted_folder_ids", []))
         local_cache_ids = set(get_folder_ids_from_local_cache())
-        known_folder_ids = list(
-            (manifest_ids | local_cache_ids) - deleted_folder_ids
-        )
+        known_folder_ids = list((manifest_ids | local_cache_ids) - deleted_folder_ids)
         try:
             folders = self.client.get_document_lists(
                 known_ids=known_folder_ids or None,
@@ -236,9 +232,7 @@ class APIExporter(Exporter):
         document_ids_seen = set()
 
         try:
-            for doc in self.client.get_all_documents(
-                workspace_id=self.workspace_id
-            ):
+            for doc in self.client.get_all_documents(workspace_id=self.workspace_id):
                 doc_id = doc.get("id")
                 if doc_id:
                     document_ids_seen.add(doc_id)
@@ -260,7 +254,9 @@ class APIExporter(Exporter):
 
             # Source 1: documents in folders that aren't owned
             for folder in folders:
-                folder_docs = folder.get("documents") or folder.get("document_ids") or []
+                folder_docs = (
+                    folder.get("documents") or folder.get("document_ids") or []
+                )
                 for doc in folder_docs:
                     doc_id = doc.get("id") if isinstance(doc, dict) else doc
                     if doc_id and doc_id not in document_ids_seen:
@@ -283,10 +279,7 @@ class APIExporter(Exporter):
             # Source 4: meetings opened via share links (LevelDB navigation history)
             owned_cache_ids = get_owned_doc_ids_from_local_cache()
             for doc_id in get_viewed_meeting_ids_from_leveldb():
-                if (
-                    doc_id not in document_ids_seen
-                    and doc_id not in owned_cache_ids
-                ):
+                if doc_id not in document_ids_seen and doc_id not in owned_cache_ids:
                     shared_doc_ids.add(doc_id)
 
             if shared_doc_ids:
@@ -295,9 +288,7 @@ class APIExporter(Exporter):
                 # Step 1: try the batch API (works for workspace-shared docs)
                 api_fetched_ids: set[str] = set()
                 try:
-                    shared_docs = self.client.get_documents_batch(
-                        list(shared_doc_ids)
-                    )
+                    shared_docs = self.client.get_documents_batch(list(shared_doc_ids))
                     for doc in shared_docs:
                         doc["_shared"] = True
                         all_documents.append(doc)
@@ -313,7 +304,9 @@ class APIExporter(Exporter):
                     errors.append(f"Error fetching shared documents: HTTP {e.code}")
                 except urllib.error.URLError as e:
                     logger.error(f"Network error fetching shared documents: {e.reason}")
-                    errors.append(f"Network error fetching shared documents: {e.reason}")
+                    errors.append(
+                        f"Network error fetching shared documents: {e.reason}"
+                    )
 
                 # Step 2: fall back to web scraping for docs the API couldn't return
                 remaining = shared_doc_ids - api_fetched_ids - document_ids_seen
@@ -323,17 +316,13 @@ class APIExporter(Exporter):
                     )
                     web_count = 0
                     for doc_id in remaining:
-                        doc = GranolaAPIClient.get_shared_document_from_web(
-                            doc_id
-                        )
+                        doc = GranolaAPIClient.get_shared_document_from_web(doc_id)
                         if doc:
                             all_documents.append(doc)
                             web_count += 1
                             time.sleep(0.3)
                     if web_count:
-                        logger.info(
-                            f"Fetched {web_count} shared documents from web"
-                        )
+                        logger.info(f"Fetched {web_count} shared documents from web")
 
         # Determine which documents need to be written (sync mode filtering)
         docs_to_write = []
@@ -405,11 +394,17 @@ class APIExporter(Exporter):
                     if e.code != 404:
                         consecutive_failures += 1
                         logger.error(f"HTTP {e.code} fetching transcript for {doc_id}")
-                        errors.append(f"Error fetching transcript for {doc_id}: HTTP {e.code}")
+                        errors.append(
+                            f"Error fetching transcript for {doc_id}: HTTP {e.code}"
+                        )
                 except urllib.error.URLError as e:
                     consecutive_failures += 1
-                    logger.error(f"Network error fetching transcript for {doc_id}: {e.reason}")
-                    errors.append(f"Network error fetching transcript for {doc_id}: {e.reason}")
+                    logger.error(
+                        f"Network error fetching transcript for {doc_id}: {e.reason}"
+                    )
+                    errors.append(
+                        f"Network error fetching transcript for {doc_id}: {e.reason}"
+                    )
 
                 if consecutive_failures >= 5:
                     remaining = len(docs_to_write) - i - 1
