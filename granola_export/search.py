@@ -114,8 +114,8 @@ class MeetingSearcher:
 
         # Participant filter
         if query.participants:
-            meeting_participants = set(p.lower() for p in meeting.document.participants)
-            query_participants = set(p.lower() for p in query.participants)
+            meeting_participants = {p.lower() for p in meeting.document.participants}
+            query_participants = {p.lower() for p in query.participants}
             if not query_participants.intersection(meeting_participants):
                 return None
 
