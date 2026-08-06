@@ -22,12 +22,11 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from . import __version__
 from .cache import GranolaCache, get_default_cache_path
-from .exporters import get_exporter, AuthenticationError
-from .search import MeetingSearcher, SearchQuery, quick_search
+from .exporters import AuthenticationError, get_exporter
+from .search import MeetingSearcher, SearchQuery
 
 
 # ANSI color codes for terminal output
@@ -54,7 +53,7 @@ def supports_color() -> bool:
     return sys.stdout.isatty()
 
 
-_color_override: Optional[bool] = None
+_color_override: bool | None = None
 _quiet: bool = False
 
 
@@ -100,7 +99,7 @@ def print_warning(text: str) -> None:
     print(c(f"! {text}", Colors.YELLOW))
 
 
-def format_date(dt: Optional[datetime]) -> str:
+def format_date(dt: datetime | None) -> str:
     """Format a datetime for display."""
     if not dt:
         return "Unknown date"
@@ -123,8 +122,8 @@ def print_hint(text: str) -> None:
 
 def visible_len(text: str) -> int:
     """Return visible length of string (excluding ANSI codes)."""
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    return len(ansi_escape.sub('', text))
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return len(ansi_escape.sub("", text))
 
 
 def pad_right(text: str, width: int) -> str:
@@ -145,7 +144,7 @@ class Spinner:
         self.message = message
         self._show_elapsed = show_elapsed
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._start: float = 0
 
     def __enter__(self) -> "Spinner":
@@ -264,7 +263,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         meetings = meetings[: args.limit]
 
     # JSON output for scripting
-    if getattr(args, 'json', False):
+    if getattr(args, "json", False):
         output = [
             {
                 "id": m.id,
@@ -296,7 +295,9 @@ def cmd_list(args: argparse.Namespace) -> int:
     for meeting in meetings:
         date_str = format_date(meeting.created_at)
         title = truncate(meeting.title, 43)
-        transcript = c(" ✓", Colors.GREEN) if meeting.has_transcript else c(" -", Colors.DIM)
+        transcript = (
+            c(" ✓", Colors.GREEN) if meeting.has_transcript else c(" -", Colors.DIM)
+        )
 
         # Use pad_right for proper alignment with ANSI codes
         print(f"{date_str:<20} {title:<45}{transcript}")
@@ -410,7 +411,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
     recent = [
         m
         for m in meetings
-        if m.created_at and m.created_at.replace(tzinfo=None) >= datetime.now() - timedelta(days=7)
+        if m.created_at
+        and m.created_at.replace(tzinfo=None) >= datetime.now() - timedelta(days=7)
     ]
 
     print(f"  Last 7 days: {len(recent)} meetings")
@@ -420,7 +422,9 @@ def cmd_stats(args: argparse.Namespace) -> int:
         if dates:
             oldest = min(dates)
             newest = max(dates)
-            print(f"  Date range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}")
+            print(
+                f"  Date range: {oldest.strftime('%Y-%m-%d')} to {newest.strftime('%Y-%m-%d')}"
+            )
 
     return 0
 
@@ -450,7 +454,9 @@ def cmd_show(args: argparse.Namespace) -> int:
         return 1
 
     if len(matches) > 1:
-        print_error(f"Ambiguous ID prefix '{args.meeting_id}' matches {len(matches)} meetings:")
+        print_error(
+            f"Ambiguous ID prefix '{args.meeting_id}' matches {len(matches)} meetings:"
+        )
         for m in matches[:10]:
             print(f"  {m.id[:12]}  {truncate(m.title, 50)}", file=sys.stderr)
         if len(matches) > 10:
@@ -467,9 +473,13 @@ def cmd_show(args: argparse.Namespace) -> int:
     print(f"{c('Date:', Colors.BOLD)} {format_date(meeting.created_at)}")
 
     if meeting.document.participants:
-        print(f"{c('Participants:', Colors.BOLD)} {', '.join(meeting.document.participants)}")
+        print(
+            f"{c('Participants:', Colors.BOLD)} {', '.join(meeting.document.participants)}"
+        )
 
-    print(f"{c('Has Transcript:', Colors.BOLD)} {'Yes' if meeting.has_transcript else 'No'}")
+    print(
+        f"{c('Has Transcript:', Colors.BOLD)} {'Yes' if meeting.has_transcript else 'No'}"
+    )
 
     # Panels/Notes
     if meeting.document.panels:
@@ -513,8 +523,8 @@ def cmd_api_export(args: argparse.Namespace) -> int:
     else:
         print_header("Granola API Export")
 
-    from .exporters.api_exporter import APIExporter
     from .api_client import AuthRefreshError, get_token_from_local
+    from .exporters.api_exporter import APIExporter
 
     def _handle_refresh_error(e: AuthRefreshError) -> int:
         """Translate a refresh failure into a clean CLI exit.
@@ -596,7 +606,9 @@ def cmd_api_export(args: argparse.Namespace) -> int:
             print_success(f"New meetings: {sync_stats.get('new', 0)}")
             print_success(f"Updated meetings: {sync_stats.get('updated', 0)}")
             if not _quiet:
-                print(f"  Unchanged (skipped): {c(str(sync_stats.get('skipped', 0)), Colors.DIM)}")
+                print(
+                    f"  Unchanged (skipped): {c(str(sync_stats.get('skipped', 0)), Colors.DIM)}"
+                )
             print_success(f"Transcripts fetched: {result.transcripts_exported}")
         else:
             print_success(f"Exported {result.documents_exported} documents")
@@ -610,8 +622,7 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         for error in result.errors[:5]:
             print_error(error)
         if len(result.errors) > 5:
-            print(f"  ... and {len(result.errors) - 5} more errors",
-                  file=sys.stderr)
+            print(f"  ... and {len(result.errors) - 5} more errors", file=sys.stderr)
 
     if not _quiet:
         # Summary
@@ -641,8 +652,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         print()
         print("Make sure Granola is installed and has been run at least once.")
         print("The app stores its data at:")
-        print(f"  macOS:   ~/Library/Application Support/Granola/cache-v3.json")
-        print(f"  Windows: %APPDATA%\\Granola\\cache-v3.json")
+        print("  macOS:   ~/Library/Application Support/Granola/cache-v3.json")
+        print("  Windows: %APPDATA%\\Granola\\cache-v3.json")
         return 1
 
     print_success("Cache file found")
@@ -772,12 +783,14 @@ Examples:
 
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Show detailed progress (DEBUG-level logging)",
     )
     verbosity.add_argument(
-        "-q", "--quiet",
+        "-q",
+        "--quiet",
         action="store_true",
         help="Suppress non-essential output",
     )
@@ -798,13 +811,15 @@ Examples:
         """,
     )
     export_parser.add_argument(
-        "-f", "--format",
+        "-f",
+        "--format",
         choices=["json", "markdown", "md", "csv", "html"],
         default="json",
         help="Export format (default: json)",
     )
     export_parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=Path,
         default=Path.home() / "granola-export",
         help="Output directory (default: ~/granola-export)",
@@ -833,7 +848,8 @@ Examples:
         """,
     )
     list_parser.add_argument(
-        "-n", "--limit",
+        "-n",
+        "--limit",
         type=int,
         default=None,
         help="Limit number of results",
@@ -854,7 +870,8 @@ Examples:
         help="Search query",
     )
     search_parser.add_argument(
-        "-n", "--limit",
+        "-n",
+        "--limit",
         type=int,
         default=20,
         help="Limit number of results (default: 20)",
@@ -918,7 +935,8 @@ Examples:
         help="Export directly from Granola API (includes shared docs)",
     )
     api_parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=Path,
         default=Path.home() / "granola-api-export",
         help="Output directory (default: ~/granola-api-export)",
