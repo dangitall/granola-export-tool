@@ -6,6 +6,7 @@ once and every module resolves paths through the same function.
 """
 
 import logging
+import os
 import platform
 from pathlib import Path
 
@@ -42,6 +43,43 @@ def get_granola_data_dir() -> Path:
 CACHE_FILENAME = "cache-v6.json"
 TOKEN_FILENAME = "supabase.json"
 ACCOUNTS_FILENAME = "stored-accounts.json"
+
+# Environment override + file name for *our own* credential store (see
+# get_config_dir). Kept separate from Granola's data dir so it survives
+# Granola encrypting/removing its plaintext token files.
+CONFIG_DIR_ENV = "GRANOLA_EXPORT_CONFIG_DIR"
+CREDENTIALS_FILENAME = "credentials.json"
+
+
+def get_config_dir() -> Path:
+    """Return this tool's own config directory (not Granola's).
+
+    This is where we persist a refresh token so exports keep working even
+    after Granola stops writing plaintext credentials to disk. It is
+    deliberately independent of :func:`get_granola_data_dir`.
+
+    Resolution order:
+      1. ``GRANOLA_EXPORT_CONFIG_DIR`` if set (used by tests and power users).
+      2. ``XDG_CONFIG_HOME/granola-export`` if ``XDG_CONFIG_HOME`` is set.
+      3. Platform default: ``%APPDATA%\\granola-export`` on Windows,
+         ``~/.config/granola-export`` everywhere else.
+    """
+    override = os.environ.get(CONFIG_DIR_ENV)
+    if override:
+        return Path(override)
+
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "granola-export"
+
+    if platform.system() == "Windows":
+        return Path.home() / "AppData" / "Roaming" / "granola-export"
+    return Path.home() / ".config" / "granola-export"
+
+
+def get_credentials_path() -> Path:
+    """Return the full path to this tool's persisted credential store."""
+    return get_config_dir() / CREDENTIALS_FILENAME
 
 
 def get_default_cache_path() -> Path:

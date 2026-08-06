@@ -667,6 +667,68 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_auth(args: argparse.Namespace) -> int:
+    """Seed or inspect this tool's own persisted credential store.
+
+    Recent Granola releases write auth tokens only to encrypted files whose
+    key lives in a keychain we cannot read. This command lets you seed a
+    refresh_token once; from then on exports mint access tokens from it
+    without needing Granola's plaintext files.
+    """
+    from .api_client import (
+        AuthRefreshError,
+        _persist_credentials,
+        refresh_access_token,
+    )
+    from .paths import get_credentials_path
+
+    creds_path = get_credentials_path()
+
+    if args.status:
+        print_header("Granola Export Credentials")
+        print(f"Store path: {creds_path}")
+        if not creds_path.exists():
+            print_error("No credentials stored")
+            print_hint("Seed one with: granola-export auth --refresh-token <token>")
+            return 1
+        try:
+            data = json.loads(creds_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            print_error(f"Credential store unreadable: {e}")
+            return 1
+        has_refresh = bool(data.get("refresh_token"))
+        has_access = bool(data.get("access_token"))
+        print_success("Credential store present")
+        print(f"  refresh_token: {'yes' if has_refresh else 'no'}")
+        print(f"  access_token:  {'yes' if has_access else 'no'}")
+        return 0 if has_refresh else 1
+
+    if not args.refresh_token:
+        print_error("Nothing to do")
+        print_hint("Use --refresh-token <token> to seed, or --status to inspect")
+        return 1
+
+    print_header("Seeding Granola Export Credentials")
+    # Verify the refresh_token works before persisting it — a bad token
+    # stored silently would just fail on the next sync with no clue why.
+    try:
+        with Spinner("Verifying refresh token"):
+            config = refresh_access_token(args.refresh_token)
+    except AuthRefreshError as e:
+        print_error(str(e))
+        if e.revoked:
+            print_hint("That refresh token has been revoked — grab a current one")
+        return 1
+
+    _persist_credentials(config)
+    if not get_credentials_path().exists():
+        print_error(f"Failed to write credential store at {creds_path}")
+        return 1
+    print_success(f"Refresh token verified and saved to {creds_path}")
+    print_hint("Exports will now mint access tokens automatically")
+    return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Entry Point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -889,6 +951,23 @@ Examples:
         help="Incremental sync: only download new/changed meetings",
     )
 
+    # Auth command — seed/inspect our own persisted credential store.
+    auth_parser = subparsers.add_parser(
+        "auth",
+        help="Seed a refresh token so exports work without Granola's plaintext files",
+    )
+    auth_parser.add_argument(
+        "--refresh-token",
+        type=str,
+        default=None,
+        help="Refresh token to verify and persist for future exports",
+    )
+    auth_parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show what is currently stored (no changes)",
+    )
+
     return parser
 
 
@@ -929,6 +1008,7 @@ def main() -> int:
         "stats": cmd_stats,
         "show": cmd_show,
         "check": cmd_check,
+        "auth": cmd_auth,
     }
 
     handler = commands.get(args.command)
