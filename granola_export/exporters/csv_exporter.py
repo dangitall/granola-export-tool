@@ -9,8 +9,8 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-from .base import BaseExporter
 from ..models import ExportResult
+from .base import BaseExporter
 
 
 class CSVExporter(BaseExporter):
@@ -48,52 +48,64 @@ class CSVExporter(BaseExporter):
         for meeting in self.cache.meetings():
             try:
                 # Meeting row
-                meetings_rows.append({
-                    "id": meeting.id,
-                    "title": meeting.title,
-                    "created_at": meeting.created_at.isoformat() if meeting.created_at else "",
-                    "updated_at": (
-                        meeting.document.updated_at.isoformat()
-                        if meeting.document.updated_at
-                        else ""
-                    ),
-                    "participants": "; ".join(meeting.document.participants),
-                    "workspace_id": meeting.document.workspace_id or "",
-                    "folder_id": meeting.document.folder_id or "",
-                    "is_shared": meeting.document.is_shared,
-                    "has_transcript": meeting.has_transcript,
-                    "panel_count": len(meeting.document.panels),
-                    "notes_word_count": len(meeting.document.notes_text.split()),
-                    "transcript_word_count": (
-                        meeting.transcript.word_count if meeting.has_transcript else 0
-                    ),
-                })
+                meetings_rows.append(
+                    {
+                        "id": meeting.id,
+                        "title": meeting.title,
+                        "created_at": (
+                            meeting.created_at.isoformat() if meeting.created_at else ""
+                        ),
+                        "updated_at": (
+                            meeting.document.updated_at.isoformat()
+                            if meeting.document.updated_at
+                            else ""
+                        ),
+                        "participants": "; ".join(meeting.document.participants),
+                        "workspace_id": meeting.document.workspace_id or "",
+                        "folder_id": meeting.document.folder_id or "",
+                        "is_shared": meeting.document.is_shared,
+                        "has_transcript": meeting.has_transcript,
+                        "panel_count": len(meeting.document.panels),
+                        "notes_word_count": len(meeting.document.notes_text.split()),
+                        "transcript_word_count": (
+                            meeting.transcript.word_count
+                            if meeting.has_transcript
+                            else 0
+                        ),
+                    }
+                )
 
                 # Panel rows
                 for i, panel in enumerate(meeting.document.panels):
-                    panels_rows.append({
-                        "meeting_id": meeting.id,
-                        "meeting_title": meeting.title,
-                        "panel_id": panel.id,
-                        "panel_order": i,
-                        "panel_type": panel.panel_type,
-                        "panel_title": panel.title,
-                        "content": panel.content,
-                        "word_count": len(panel.content.split()) if panel.content else 0,
-                    })
+                    panels_rows.append(
+                        {
+                            "meeting_id": meeting.id,
+                            "meeting_title": meeting.title,
+                            "panel_id": panel.id,
+                            "panel_order": i,
+                            "panel_type": panel.panel_type,
+                            "panel_title": panel.title,
+                            "content": panel.content,
+                            "word_count": (
+                                len(panel.content.split()) if panel.content else 0
+                            ),
+                        }
+                    )
 
                 # Transcript rows
                 if self.include_transcripts and meeting.has_transcript:
                     for seg in meeting.transcript.segments:
-                        transcripts_rows.append({
-                            "meeting_id": meeting.id,
-                            "meeting_title": meeting.title,
-                            "start_time": seg.start_time,
-                            "end_time": seg.end_time,
-                            "speaker": seg.speaker or "",
-                            "text": seg.text,
-                            "confidence": seg.confidence or "",
-                        })
+                        transcripts_rows.append(
+                            {
+                                "meeting_id": meeting.id,
+                                "meeting_title": meeting.title,
+                                "start_time": seg.start_time,
+                                "end_time": seg.end_time,
+                                "speaker": seg.speaker or "",
+                                "text": seg.text,
+                                "confidence": seg.confidence or "",
+                            }
+                        )
                     trans_exported += 1
 
                 docs_exported += 1
@@ -106,9 +118,18 @@ class CSVExporter(BaseExporter):
             self.output_dir / "meetings.csv",
             meetings_rows,
             [
-                "id", "title", "created_at", "updated_at", "participants",
-                "workspace_id", "folder_id", "is_shared", "has_transcript",
-                "panel_count", "notes_word_count", "transcript_word_count",
+                "id",
+                "title",
+                "created_at",
+                "updated_at",
+                "participants",
+                "workspace_id",
+                "folder_id",
+                "is_shared",
+                "has_transcript",
+                "panel_count",
+                "notes_word_count",
+                "transcript_word_count",
             ],
         )
 
@@ -117,8 +138,14 @@ class CSVExporter(BaseExporter):
             self.output_dir / "panels.csv",
             panels_rows,
             [
-                "meeting_id", "meeting_title", "panel_id", "panel_order",
-                "panel_type", "panel_title", "content", "word_count",
+                "meeting_id",
+                "meeting_title",
+                "panel_id",
+                "panel_order",
+                "panel_type",
+                "panel_title",
+                "content",
+                "word_count",
             ],
         )
 
@@ -128,19 +155,26 @@ class CSVExporter(BaseExporter):
                 self.output_dir / "transcripts.csv",
                 transcripts_rows,
                 [
-                    "meeting_id", "meeting_title", "start_time", "end_time",
-                    "speaker", "text", "confidence",
+                    "meeting_id",
+                    "meeting_title",
+                    "start_time",
+                    "end_time",
+                    "speaker",
+                    "text",
+                    "confidence",
                 ],
             )
 
         # Write people CSV
         people_rows = []
         for person in self.cache.people():
-            people_rows.append({
-                "id": person.id,
-                "name": person.name,
-                "email": person.email or "",
-            })
+            people_rows.append(
+                {
+                    "id": person.id,
+                    "name": person.name,
+                    "email": person.email or "",
+                }
+            )
 
         self._write_csv(
             self.output_dir / "people.csv",
@@ -150,11 +184,10 @@ class CSVExporter(BaseExporter):
 
         # Write summary CSV
         stats = self.cache.get_stats()
-        summary_rows = [
-            {"metric": k, "value": str(v)}
-            for k, v in stats.items()
-        ]
-        summary_rows.append({"metric": "export_date", "value": datetime.now().isoformat()})
+        summary_rows = [{"metric": k, "value": str(v)} for k, v in stats.items()]
+        summary_rows.append(
+            {"metric": "export_date", "value": datetime.now().isoformat()}
+        )
 
         self._write_csv(
             self.output_dir / "summary.csv",

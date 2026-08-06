@@ -6,12 +6,12 @@ documents, and transcripts.
 """
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Iterator, Optional
 
 from .cache import GranolaCache
-from .models import Meeting, Document, Transcript
+from .models import Meeting
 
 
 @dataclass
@@ -45,12 +45,12 @@ class SearchQuery:
         )
     """
 
-    text: Optional[str] = None
-    date_from: Optional[datetime] = None
-    date_to: Optional[datetime] = None
-    has_transcript: Optional[bool] = None
+    text: str | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    has_transcript: bool | None = None
     participants: list[str] = field(default_factory=list)
-    workspace_id: Optional[str] = None
+    workspace_id: str | None = None
     case_sensitive: bool = False
     regex: bool = False
 
@@ -91,7 +91,7 @@ class MeetingSearcher:
 
     def _match_meeting(
         self, meeting: Meeting, query: SearchQuery
-    ) -> Optional[SearchResult]:
+    ) -> SearchResult | None:
         """Check if a meeting matches the query."""
         # Date filters
         if query.date_from and meeting.created_at:
@@ -114,9 +114,7 @@ class MeetingSearcher:
 
         # Participant filter
         if query.participants:
-            meeting_participants = set(
-                p.lower() for p in meeting.document.participants
-            )
+            meeting_participants = set(p.lower() for p in meeting.document.participants)
             query_participants = set(p.lower() for p in query.participants)
             if not query_participants.intersection(meeting_participants):
                 return None
@@ -133,9 +131,7 @@ class MeetingSearcher:
             score=1.0,
         )
 
-    def _text_search(
-        self, meeting: Meeting, query: SearchQuery
-    ) -> Optional[SearchResult]:
+    def _text_search(self, meeting: Meeting, query: SearchQuery) -> SearchResult | None:
         """Perform text search on a meeting."""
         search_text = query.text
 

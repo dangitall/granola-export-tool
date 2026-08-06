@@ -6,11 +6,9 @@ note-taking apps like Obsidian, Notion, or GitHub.
 """
 
 from datetime import datetime
-from pathlib import Path
-from textwrap import dedent
 
-from .base import BaseExporter
 from ..models import ExportResult, Meeting
+from .base import BaseExporter
 
 
 class MarkdownExporter(BaseExporter):
@@ -75,12 +73,14 @@ class MarkdownExporter(BaseExporter):
                     f.write(content)
 
                 # Add to index
-                index_entries.append({
-                    "title": meeting.title,
-                    "date": meeting.created_at,
-                    "filename": filename,
-                    "has_transcript": meeting.has_transcript,
-                })
+                index_entries.append(
+                    {
+                        "title": meeting.title,
+                        "date": meeting.created_at,
+                        "filename": filename,
+                        "has_transcript": meeting.has_transcript,
+                    }
+                )
 
                 docs_exported += 1
                 if meeting.has_transcript:
@@ -129,7 +129,9 @@ class MarkdownExporter(BaseExporter):
 
         # Metadata section
         if meeting.created_at:
-            lines.append(f"**Date:** {meeting.created_at.strftime('%B %d, %Y at %I:%M %p')}")
+            lines.append(
+                f"**Date:** {meeting.created_at.strftime('%B %d, %Y at %I:%M %p')}"
+            )
             lines.append("")
 
         if meeting.document.participants:
@@ -240,7 +242,9 @@ class MarkdownExporter(BaseExporter):
                 date_str = entry["date"].strftime("%d") + " - "
 
             transcript_badge = " `transcript`" if entry["has_transcript"] else ""
-            lines.append(f"- {date_str}[[{entry['filename'][:-3]}|{entry['title']}]]{transcript_badge}")
+            lines.append(
+                f"- {date_str}[[{entry['filename'][:-3]}|{entry['title']}]]{transcript_badge}"
+            )
 
         lines.append("")
         return "\n".join(lines)

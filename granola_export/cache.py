@@ -6,19 +6,21 @@ double-encoded JSON structure into usable data models.
 """
 
 import json
-from pathlib import Path
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from .models import (
+    Calendar,
     Document,
-    Transcript,
+    Folder,
     Meeting,
     Person,
+    Transcript,
     Workspace,
-    Calendar,
-    Folder,
 )
+
 # Re-exported for backward compatibility: cli.py and external consumers
 # import get_default_cache_path from this module.
 from .paths import get_default_cache_path  # noqa: F401
@@ -38,7 +40,7 @@ class GranolaCache:
         ...     print(meeting.title)
     """
 
-    def __init__(self, cache_path: Optional[Path] = None):
+    def __init__(self, cache_path: Path | None = None):
         """
         Initialize the cache loader.
 
@@ -76,7 +78,7 @@ class GranolaCache:
                 "Make sure Granola is installed and has been run at least once."
             )
 
-        with open(self.cache_path, "r", encoding="utf-8") as f:
+        with open(self.cache_path, encoding="utf-8") as f:
             raw_data = json.load(f)
 
         # Granola uses double-encoded JSON
@@ -108,7 +110,7 @@ class GranolaCache:
         self._ensure_loaded()
         return len(self._state.get("transcripts", {}))
 
-    def get_document(self, doc_id: str) -> Optional[Document]:
+    def get_document(self, doc_id: str) -> Document | None:
         """
         Get a specific document by ID.
 
@@ -131,7 +133,7 @@ class GranolaCache:
             panels.get(doc_id, []),
         )
 
-    def get_transcript(self, doc_id: str) -> Optional[Transcript]:
+    def get_transcript(self, doc_id: str) -> Transcript | None:
         """
         Get a transcript by document ID.
 
@@ -149,7 +151,7 @@ class GranolaCache:
 
         return Transcript.from_dict(doc_id, transcripts[doc_id])
 
-    def get_meeting(self, doc_id: str) -> Optional[Meeting]:
+    def get_meeting(self, doc_id: str) -> Meeting | None:
         """
         Get a complete meeting (document + transcript + metadata).
 
@@ -285,8 +287,7 @@ class GranolaCache:
                 if isinstance(doc_ids, list):
                     # Extract just IDs if it's a list of dicts
                     doc_ids = [
-                        d.get("id") if isinstance(d, dict) else d
-                        for d in doc_ids
+                        d.get("id") if isinstance(d, dict) else d for d in doc_ids
                     ]
                 yield Folder.from_dict(folder_id, metadata, doc_ids)
 
@@ -354,15 +355,17 @@ class GranolaCache:
             query = query.lower()
 
         for transcript in self.transcripts():
-            text = transcript.full_text if case_sensitive else transcript.full_text.lower()
+            text = (
+                transcript.full_text if case_sensitive else transcript.full_text.lower()
+            )
 
             if query in text:
                 yield transcript
 
     def filter_meetings_by_date(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> Iterator[Meeting]:
         """
         Filter meetings by date range.
@@ -396,7 +399,7 @@ class GranolaCache:
         self._ensure_loaded()
         return self._state
 
-    def get_raw_key(self, key: str) -> Optional[Any]:
+    def get_raw_key(self, key: str) -> Any | None:
         """
         Get a raw value from the state by key.
 

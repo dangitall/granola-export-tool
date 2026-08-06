@@ -5,13 +5,11 @@ Generates a self-contained HTML report with navigation,
 search functionality, and a professional design.
 """
 
-import html
 import json
 from datetime import datetime
-from pathlib import Path
 
-from .base import BaseExporter
 from ..models import ExportResult, Meeting
+from .base import BaseExporter
 
 
 class HTMLExporter(BaseExporter):
@@ -106,7 +104,7 @@ class HTMLExporter(BaseExporter):
         """Generate the complete HTML document."""
         meetings_json = json.dumps(meetings, ensure_ascii=False)
 
-        return f'''<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -562,4 +560,4 @@ class HTMLExporter(BaseExporter):
         renderMeetings(meetings);
     </script>
 </body>
-</html>'''
+</html>"""

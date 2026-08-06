@@ -6,10 +6,9 @@ Exports meetings, documents, and transcripts to structured JSON files.
 
 import json
 from datetime import datetime
-from pathlib import Path
 
-from .base import BaseExporter
 from ..models import ExportResult
+from .base import BaseExporter
 
 
 class JSONExporter(BaseExporter):

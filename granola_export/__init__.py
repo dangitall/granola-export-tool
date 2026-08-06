@@ -10,17 +10,17 @@ https://github.com/granola-export-tool
 __version__ = "1.0.0"
 __author__ = "Granola Export Tool Contributors"
 
-from .cache import GranolaCache
 from .api_client import GranolaAPIClient, get_token_from_local
+from .cache import GranolaCache
 from .models import (
-    Document,
-    Transcript,
-    Meeting,
-    Person,
-    Workspace,
-    Folder,
     Attendee,
     CalendarEvent,
+    Document,
+    Folder,
+    Meeting,
+    Person,
+    Transcript,
+    Workspace,
 )
 
 __all__ = [

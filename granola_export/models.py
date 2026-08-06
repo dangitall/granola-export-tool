@@ -7,8 +7,7 @@ transcripts, and associated metadata.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
-import json
+from typing import Any
 
 
 @dataclass
@@ -17,8 +16,8 @@ class Person:
 
     id: str
     name: str
-    email: Optional[str] = None
-    avatar_url: Optional[str] = None
+    email: str | None = None
+    avatar_url: str | None = None
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -54,14 +53,16 @@ class TranscriptSegment:
     text: str
     start_time: float
     end_time: float
-    speaker: Optional[str] = None
-    confidence: Optional[float] = None
+    speaker: str | None = None
+    confidence: float | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "TranscriptSegment":
         """Create a TranscriptSegment from a dictionary."""
         # Handle various timestamp formats (startTime, start, start_timestamp)
-        start_time = data.get("startTime", data.get("start", data.get("start_timestamp", 0)))
+        start_time = data.get(
+            "startTime", data.get("start", data.get("start_timestamp", 0))
+        )
         end_time = data.get("endTime", data.get("end", data.get("end_timestamp", 0)))
 
         # Convert ISO timestamp strings to epoch seconds so timing info
@@ -87,7 +88,7 @@ class Transcript:
     document_id: str
     segments: list[TranscriptSegment] = field(default_factory=list)
     full_text: str = ""
-    audio_source: Optional[str] = None
+    audio_source: str | None = None
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -178,10 +179,10 @@ class Attendee:
 
     email: str
     name: str
-    company: Optional[str] = None
-    title: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    avatar_url: Optional[str] = None
+    company: str | None = None
+    title: str | None = None
+    linkedin_url: str | None = None
+    avatar_url: str | None = None
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -198,10 +199,18 @@ class Attendee:
 
         return cls(
             email=email,
-            name=name_info.get("fullName", email) if isinstance(name_info, dict) else email,
+            name=(
+                name_info.get("fullName", email)
+                if isinstance(name_info, dict)
+                else email
+            ),
             company=employment.get("name") or company_info.get("name"),
             title=employment.get("title"),
-            linkedin_url=f"https://linkedin.com/{linkedin.get('handle')}" if linkedin.get("handle") else None,
+            linkedin_url=(
+                f"https://linkedin.com/{linkedin.get('handle')}"
+                if linkedin.get("handle")
+                else None
+            ),
             avatar_url=person.get("avatar"),
             raw_data=data,
         )
@@ -213,12 +222,12 @@ class CalendarEvent:
 
     id: str
     summary: str
-    location: Optional[str] = None
-    description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    html_link: Optional[str] = None
-    organizer_email: Optional[str] = None
+    location: str | None = None
+    description: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    html_link: str | None = None
+    organizer_email: str | None = None
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -232,13 +241,17 @@ class CalendarEvent:
 
         if start_data.get("dateTime"):
             try:
-                start_time = datetime.fromisoformat(start_data["dateTime"].replace("Z", "+00:00"))
+                start_time = datetime.fromisoformat(
+                    start_data["dateTime"].replace("Z", "+00:00")
+                )
             except (ValueError, TypeError):
                 pass
 
         if end_data.get("dateTime"):
             try:
-                end_time = datetime.fromisoformat(end_data["dateTime"].replace("Z", "+00:00"))
+                end_time = datetime.fromisoformat(
+                    end_data["dateTime"].replace("Z", "+00:00")
+                )
             except (ValueError, TypeError):
                 pass
 
@@ -252,7 +265,9 @@ class CalendarEvent:
             start_time=start_time,
             end_time=end_time,
             html_link=data.get("htmlLink"),
-            organizer_email=organizer.get("email") if isinstance(organizer, dict) else None,
+            organizer_email=(
+                organizer.get("email") if isinstance(organizer, dict) else None
+            ),
             raw_data=data,
         )
 
@@ -263,10 +278,10 @@ class Folder:
 
     id: str
     title: str
-    description: Optional[str] = None
-    icon: Optional[dict] = None
-    workspace_id: Optional[str] = None
-    workspace_name: Optional[str] = None
+    description: str | None = None
+    icon: dict | None = None
+    workspace_id: str | None = None
+    workspace_name: str | None = None
     is_favourited: bool = False
     is_shared: bool = False
     visibility: str = "private"
@@ -275,7 +290,9 @@ class Folder:
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_dict(cls, folder_id: str, metadata: dict, document_ids: list = None) -> "Folder":
+    def from_dict(
+        cls, folder_id: str, metadata: dict, document_ids: list = None
+    ) -> "Folder":
         """Create a Folder from metadata and document list."""
         return cls(
             id=folder_id,
@@ -299,26 +316,26 @@ class Document:
 
     id: str
     title: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     panels: list[Panel] = field(default_factory=list)
     participants: list[str] = field(default_factory=list)
     attendees: list[Attendee] = field(default_factory=list)
-    calendar_event: Optional[CalendarEvent] = None
-    calendar_event_id: Optional[str] = None
-    workspace_id: Optional[str] = None
-    folder_id: Optional[str] = None
+    calendar_event: CalendarEvent | None = None
+    calendar_event_id: str | None = None
+    workspace_id: str | None = None
+    folder_id: str | None = None
     is_shared: bool = False
     # Rich content fields
-    notes_markdown: Optional[str] = None
-    notes_plain: Optional[str] = None
-    summary: Optional[str] = None
-    overview: Optional[str] = None
+    notes_markdown: str | None = None
+    notes_plain: str | None = None
+    summary: str | None = None
+    overview: str | None = None
     # CRM integration links
-    hubspot_note_url: Optional[str] = None
-    affinity_note_id: Optional[str] = None
+    hubspot_note_url: str | None = None
+    affinity_note_id: str | None = None
     # Metadata
-    creation_source: Optional[str] = None
+    creation_source: str | None = None
     attachments: list[dict] = field(default_factory=list)
     raw_data: dict = field(default_factory=dict, repr=False)
 
@@ -335,7 +352,9 @@ class Document:
                 if isinstance(created_str, (int, float)):
                     created_at = datetime.fromtimestamp(created_str / 1000)
                 else:
-                    created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    created_at = datetime.fromisoformat(
+                        created_str.replace("Z", "+00:00")
+                    )
             except (ValueError, TypeError):
                 pass
 
@@ -345,7 +364,9 @@ class Document:
                 if isinstance(updated_str, (int, float)):
                     updated_at = datetime.fromtimestamp(updated_str / 1000)
                 else:
-                    updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+                    updated_at = datetime.fromisoformat(
+                        updated_str.replace("Z", "+00:00")
+                    )
             except (ValueError, TypeError):
                 pass
 
@@ -384,7 +405,8 @@ class Document:
             participants=participants,
             attendees=attendees,
             calendar_event=calendar_event,
-            calendar_event_id=data.get("calendarEventId") or data.get("calendar_event_id"),
+            calendar_event_id=data.get("calendarEventId")
+            or data.get("calendar_event_id"),
             workspace_id=data.get("workspaceId") or data.get("workspace_id"),
             folder_id=data.get("folderId") or data.get("folder_id"),
             is_shared=data.get("isShared", data.get("is_shared", False)),
@@ -458,8 +480,16 @@ class Document:
                 "summary": self.calendar_event.summary,
                 "location": self.calendar_event.location,
                 "description": self.calendar_event.description,
-                "start_time": self.calendar_event.start_time.isoformat() if self.calendar_event.start_time else None,
-                "end_time": self.calendar_event.end_time.isoformat() if self.calendar_event.end_time else None,
+                "start_time": (
+                    self.calendar_event.start_time.isoformat()
+                    if self.calendar_event.start_time
+                    else None
+                ),
+                "end_time": (
+                    self.calendar_event.end_time.isoformat()
+                    if self.calendar_event.end_time
+                    else None
+                ),
                 "html_link": self.calendar_event.html_link,
                 "organizer_email": self.calendar_event.organizer_email,
             }
@@ -479,7 +509,7 @@ class Meeting:
     """Combined meeting data including document, transcript, and metadata."""
 
     document: Document
-    transcript: Optional[Transcript] = None
+    transcript: Transcript | None = None
     metadata: dict = field(default_factory=dict)
 
     @property
@@ -491,7 +521,7 @@ class Meeting:
         return self.document.title
 
     @property
-    def created_at(self) -> Optional[datetime]:
+    def created_at(self) -> datetime | None:
         return self.document.created_at
 
     @property
@@ -541,7 +571,7 @@ class Calendar:
     id: str
     name: str
     provider: str
-    email: Optional[str] = None
+    email: str | None = None
     raw_data: dict = field(default_factory=dict, repr=False)
 
     @classmethod
