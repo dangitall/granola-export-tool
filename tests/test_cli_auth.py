@@ -3,8 +3,6 @@
 import json
 from unittest.mock import patch
 
-import pytest
-
 from granola_export.api_client import APIConfig, AuthRefreshError
 from granola_export.cli import cmd_auth
 
@@ -24,9 +22,7 @@ def _creds_path(config_dir):
 class TestAuthSeed:
     def test_valid_token_verified_and_persisted(self, isolated_config_dir):
         """A good refresh token is verified against the endpoint, then saved."""
-        minted = APIConfig(
-            access_token="minted-access", refresh_token="good-refresh"
-        )
+        minted = APIConfig(access_token="minted-access", refresh_token="good-refresh")
         with patch(
             "granola_export.api_client.refresh_access_token",
             return_value=minted,

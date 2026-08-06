@@ -2,14 +2,12 @@
 
 from unittest.mock import patch
 
-import pytest
-
 from granola_export.paths import (
-    get_granola_data_dir,
-    get_default_cache_path,
-    get_token_path,
     CACHE_FILENAME,
     TOKEN_FILENAME,
+    get_default_cache_path,
+    get_granola_data_dir,
+    get_token_path,
 )
 
 
@@ -84,9 +82,7 @@ class TestConfigDir:
 
         monkeypatch.delenv(CONFIG_DIR_ENV, raising=False)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-        monkeypatch.setattr(
-            "granola_export.paths.platform.system", lambda: "Darwin"
-        )
+        monkeypatch.setattr("granola_export.paths.platform.system", lambda: "Darwin")
         assert get_config_dir().parts[-2:] == (".config", "granola-export")
 
 

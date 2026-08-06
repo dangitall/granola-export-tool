@@ -13,15 +13,13 @@ import gzip
 import io
 import json
 import logging
+import os
 import re
 import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterator, Optional
-import urllib.request
 import urllib.error
-
-import os
+import urllib.request
+from collections.abc import Iterator
+from dataclasses import dataclass
 
 from .paths import (
     CACHE_FILENAME,
@@ -63,8 +61,8 @@ class APIConfig:
     """Configuration for API access."""
 
     access_token: str
-    refresh_token: Optional[str] = None
-    client_id: Optional[str] = None
+    refresh_token: str | None = None
+    client_id: str | None = None
     base_url: str = "https://api.granola.ai"
     user_agent: str = "Granola/5.354.0"
     client_version: str = "5.354.0"
@@ -143,7 +141,10 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
                 err_payload = json.loads(body_bytes.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 err_payload = None
-            if isinstance(err_payload, dict) and err_payload.get("error") == "logout_user":
+            if (
+                isinstance(err_payload, dict)
+                and err_payload.get("error") == "logout_user"
+            ):
                 raise AuthRefreshError(
                     "Granola sign-in expired — open the Granola app "
                     "and sign in again.",
@@ -159,9 +160,7 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
 
     new_access = payload.get("access_token")
     if not new_access:
-        raise AuthRefreshError(
-            "refresh-access-token response missing access_token"
-        )
+        raise AuthRefreshError("refresh-access-token response missing access_token")
     return APIConfig(
         access_token=new_access,
         # Granola does not rotate refresh tokens today, but the server is
@@ -170,7 +169,7 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
     )
 
 
-def _load_token_from_stored_accounts() -> Optional[APIConfig]:
+def _load_token_from_stored_accounts() -> APIConfig | None:
     """Read the active access token from Granola v7+ stored-accounts.json.
 
     The file is a JSON document like ``{"accounts": "<json string>"}``
@@ -192,7 +191,7 @@ def _load_token_from_stored_accounts() -> Optional[APIConfig]:
         return None
 
     try:
-        with open(accounts_path, "r") as f:
+        with open(accounts_path) as f:
             data = json.load(f)
 
         accounts = data.get("accounts")
@@ -227,8 +226,8 @@ def _load_token_from_stored_accounts() -> Optional[APIConfig]:
             refresh_token=tokens.get("refresh_token"),
         )
     except (
+        OSError,
         json.JSONDecodeError,
-        IOError,
         KeyError,
         IndexError,
         TypeError,
@@ -240,7 +239,7 @@ def _load_token_from_stored_accounts() -> Optional[APIConfig]:
         return None
 
 
-def _load_token_from_supabase() -> Optional[APIConfig]:
+def _load_token_from_supabase() -> APIConfig | None:
     """Read the access token from the legacy supabase.json file.
 
     Older Granola versions (pre-v7) wrote tokens here. The file is no
@@ -251,7 +250,7 @@ def _load_token_from_supabase() -> Optional[APIConfig]:
         return None
 
     try:
-        with open(token_path, "r") as f:
+        with open(token_path) as f:
             data = json.load(f)
 
         # workos_tokens may be a JSON string or a dict
@@ -267,12 +266,12 @@ def _load_token_from_supabase() -> Optional[APIConfig]:
             access_token=access_token,
             refresh_token=workos.get("refresh_token"),
         )
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.debug(f"Failed to read supabase.json: {e}")
         return None
 
 
-def _load_persisted_credentials() -> Optional[APIConfig]:
+def _load_persisted_credentials() -> APIConfig | None:
     """Read credentials from *our own* persisted store (see paths.get_config_dir).
 
     This is the fallback for when Granola no longer writes any plaintext
@@ -284,7 +283,7 @@ def _load_persisted_credentials() -> Optional[APIConfig]:
         return None
 
     try:
-        with open(creds_path, "r") as f:
+        with open(creds_path) as f:
             data = json.load(f)
         refresh_token = data.get("refresh_token")
         if not refresh_token:
@@ -294,7 +293,7 @@ def _load_persisted_credentials() -> Optional[APIConfig]:
             access_token=data.get("access_token") or "",
             refresh_token=refresh_token,
         )
-    except (json.JSONDecodeError, IOError, TypeError) as e:
+    except (OSError, json.JSONDecodeError, TypeError) as e:
         logger.debug(f"Failed to read persisted credentials: {e}")
         return None
 
@@ -341,7 +340,7 @@ def _persist_credentials(config: APIConfig) -> None:
             pass
 
 
-def get_token_from_local() -> Optional[APIConfig]:
+def get_token_from_local() -> APIConfig | None:
     """
     Obtain an API token, preferring Granola's local storage.
 
@@ -392,9 +391,7 @@ def get_token_from_local() -> Optional[APIConfig]:
         not config.access_token or _is_jwt_expired(config.access_token)
     )
     if needs_refresh:
-        logger.info(
-            "Cached access token expired; refreshing via Granola endpoint"
-        )
+        logger.info("Cached access token expired; refreshing via Granola endpoint")
         config = refresh_access_token(config.refresh_token)
         _persist_credentials(config)
 
@@ -417,7 +414,7 @@ def get_folder_ids_from_local_cache() -> list[str]:
         return []
 
     try:
-        with open(cache_path, "r") as f:
+        with open(cache_path) as f:
             data = json.load(f)
         doc_lists = data.get("cache", {}).get("state", {}).get("documentLists", {})
         if isinstance(doc_lists, dict):
@@ -425,7 +422,7 @@ def get_folder_ids_from_local_cache() -> list[str]:
             if ids:
                 logger.info(f"Found {len(ids)} folder IDs in local Granola cache")
             return ids
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.debug(f"Could not read local cache for folder IDs: {e}")
 
     return []
@@ -446,15 +443,17 @@ def get_shared_doc_ids_from_local_cache() -> list[str]:
         return []
 
     try:
-        with open(cache_path, "r") as f:
+        with open(cache_path) as f:
             data = json.load(f)
         shared_docs = data.get("cache", {}).get("state", {}).get("sharedDocuments", {})
         if isinstance(shared_docs, dict):
             ids = list(shared_docs.keys())
             if ids:
-                logger.info(f"Found {len(ids)} shared document IDs in local Granola cache")
+                logger.info(
+                    f"Found {len(ids)} shared document IDs in local Granola cache"
+                )
             return ids
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.debug(f"Could not read local cache for shared document IDs: {e}")
 
     return []
@@ -471,20 +470,18 @@ def get_owned_doc_ids_from_local_cache() -> set[str]:
         return set()
 
     try:
-        with open(cache_path, "r") as f:
+        with open(cache_path) as f:
             data = json.load(f)
         docs = data.get("cache", {}).get("state", {}).get("documents", {})
         if isinstance(docs, dict):
             return set(docs.keys())
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.debug(f"Could not read local cache for owned doc IDs: {e}")
 
     return set()
 
 
-_UUID_RE = re.compile(
-    rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+_UUID_RE = re.compile(rb"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def get_viewed_meeting_ids_from_leveldb() -> set[str]:
@@ -511,7 +508,7 @@ def get_viewed_meeting_ids_from_leveldb() -> set[str]:
         if path.suffix in (".ldb", ".log"):
             try:
                 content.extend(path.read_bytes())
-            except IOError:
+            except OSError:
                 continue
 
     if not content:
@@ -524,9 +521,7 @@ def get_viewed_meeting_ids_from_leveldb() -> set[str]:
             ids.add(uuid.group().decode("ascii"))
 
     if ids:
-        logger.info(
-            f"Found {len(ids)} meeting IDs in Local Storage LevelDB"
-        )
+        logger.info(f"Found {len(ids)} meeting IDs in Local Storage LevelDB")
     return ids
 
 
@@ -596,7 +591,7 @@ class GranolaAPIClient:
         self,
         endpoint: str,
         method: str = "POST",
-        data: Optional[dict] = None,
+        data: dict | None = None,
         max_retries: int = 3,
     ) -> dict:
         """Make an API request with retry logic.
@@ -632,7 +627,7 @@ class GranolaAPIClient:
                     raw_data = response.read()
 
                     # Check if response is gzip-compressed
-                    if raw_data[:2] == b'\x1f\x8b':
+                    if raw_data[:2] == b"\x1f\x8b":
                         raw_data = gzip.decompress(raw_data)
 
                     return json.loads(raw_data.decode("utf-8"))
@@ -645,7 +640,7 @@ class GranolaAPIClient:
                     if retry_after and retry_after.isdigit():
                         delay = min(int(retry_after), 60)
                     else:
-                        delay = 2 ** attempt  # 1s, 2s, 4s
+                        delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
                         f"HTTP {e.code}, retrying in {delay}s "
                         f"(attempt {attempt + 1}/{max_retries})"
@@ -658,7 +653,7 @@ class GranolaAPIClient:
                 error_body = ""
                 if e.fp:
                     raw = e.read()
-                    if raw[:2] == b'\x1f\x8b':
+                    if raw[:2] == b"\x1f\x8b":
                         raw = gzip.decompress(raw)
                     error_body = raw.decode("utf-8")
                 logger.error(f"API error {e.code}: {error_body}")
@@ -667,7 +662,7 @@ class GranolaAPIClient:
             except urllib.error.URLError as e:
                 # Retry on network errors
                 if attempt < max_retries:
-                    delay = 2 ** attempt  # 1s, 2s, 4s
+                    delay = 2**attempt  # 1s, 2s, 4s
                     logger.warning(
                         f"Network error: {e.reason}, retrying in {delay}s "
                         f"(attempt {attempt + 1}/{max_retries})"
@@ -683,7 +678,7 @@ class GranolaAPIClient:
                 # TimeoutError is not a subclass of URLError, but can be
                 # raised by socket operations during HTTP requests
                 if attempt < max_retries:
-                    delay = 2 ** attempt
+                    delay = 2**attempt
                     logger.warning(
                         f"Timeout/connection error: {e}, retrying in {delay}s "
                         f"(attempt {attempt + 1}/{max_retries})"
@@ -692,7 +687,9 @@ class GranolaAPIClient:
                     last_exception = e
                     continue
 
-                logger.error(f"Timeout/connection error after {max_retries} retries: {e}")
+                logger.error(
+                    f"Timeout/connection error after {max_retries} retries: {e}"
+                )
                 raise urllib.error.URLError(str(e)) from e
 
         # Should not reach here, but guard against it
@@ -706,7 +703,7 @@ class GranolaAPIClient:
 
     def get_documents(
         self,
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict:
@@ -737,7 +734,7 @@ class GranolaAPIClient:
 
     def get_all_documents(
         self,
-        workspace_id: Optional[str] = None,
+        workspace_id: str | None = None,
         limit: int = 100,
     ) -> Iterator[dict]:
         """
@@ -772,7 +769,9 @@ class GranolaAPIClient:
                 consecutive_errors += 1
                 logger.error(f"Error fetching documents at offset {offset}: {e}")
                 if consecutive_errors >= 2:
-                    logger.error("Multiple consecutive page failures, stopping pagination")
+                    logger.error(
+                        "Multiple consecutive page failures, stopping pagination"
+                    )
                     break
                 # Skip this page and try the next
                 offset += limit
@@ -834,7 +833,7 @@ class GranolaAPIClient:
         return all_docs
 
     @staticmethod
-    def get_shared_document_from_web(document_id: str) -> Optional[dict]:
+    def get_shared_document_from_web(document_id: str) -> dict | None:
         """
         Fetch a shared document from the Granola web share page.
 
@@ -850,9 +849,7 @@ class GranolaAPIClient:
             flag, or None if the page doesn't contain usable content.
         """
         url = f"https://notes.granola.ai/d/{document_id}"
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "Mozilla/5.0"}
-        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 html = resp.read().decode("utf-8")
@@ -861,9 +858,7 @@ class GranolaAPIClient:
             return None
 
         # RSC payload chunks are embedded as self.__next_f.push([1,"..."])
-        chunks = re.findall(
-            r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html
-        )
+        chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html)
 
         title = None
         creator = None
@@ -908,7 +903,7 @@ class GranolaAPIClient:
     # Transcripts
     # -------------------------------------------------------------------------
 
-    def get_document_transcript(self, document_id: str) -> Optional[list]:
+    def get_document_transcript(self, document_id: str) -> list | None:
         """
         Fetch transcript for a specific document.
 
@@ -949,7 +944,7 @@ class GranolaAPIClient:
             return response
         return response.get("workspaces", [])
 
-    def get_document_list(self, list_id: str) -> Optional[dict]:
+    def get_document_list(self, list_id: str) -> dict | None:
         """
         Fetch a single document list (folder) by ID.
 
@@ -963,17 +958,13 @@ class GranolaAPIClient:
             Folder dictionary, or None if not found.
         """
         try:
-            return self._request(
-                "/v1/get-document-list", data={"list_id": list_id}
-            )
+            return self._request("/v1/get-document-list", data={"list_id": list_id})
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
             raise
 
-    def get_document_lists(
-        self, known_ids: Optional[list[str]] = None
-    ) -> list[dict]:
+    def get_document_lists(self, known_ids: list[str] | None = None) -> list[dict]:
         """
         Fetch all document lists (folders).
 
@@ -991,15 +982,13 @@ class GranolaAPIClient:
         # Try bulk endpoint first
         try:
             response = self._request(
-                "/v2/get-document-lists", data={}, max_retries=1,
+                "/v2/get-document-lists",
+                data={},
+                max_retries=1,
             )
             if isinstance(response, list):
                 return response
-            return (
-                response.get("lists")
-                or response.get("document_lists")
-                or []
-            )
+            return response.get("lists") or response.get("document_lists") or []
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             logger.warning(f"Bulk folder endpoint failed: {e}")
 

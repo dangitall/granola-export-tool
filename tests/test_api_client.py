@@ -49,7 +49,7 @@ def _make_http_error(code: int, headers=None) -> urllib.error.HTTPError:
     )
 
 
-def _make_response(data: bytes = b'{}'):
+def _make_response(data: bytes = b"{}"):
     """Create a mock urllib response."""
     resp = MagicMock()
     resp.read.return_value = data
@@ -237,9 +237,7 @@ class TestGetTokenFromLocal:
         workos = {"access_token": access_token}
         if refresh_token is not None:
             workos["refresh_token"] = refresh_token
-        (dir_path / "supabase.json").write_text(
-            json.dumps({"workos_tokens": workos})
-        )
+        (dir_path / "supabase.json").write_text(json.dumps({"workos_tokens": workos}))
 
     def test_reads_token_from_stored_accounts(self, tmp_path):
         """v7+ format: token comes from stored-accounts.json."""
@@ -485,9 +483,7 @@ class TestPersistedCredentialStore:
         ):
             assert get_token_from_local() is None
 
-    def test_corrupt_store_falls_through_to_none(
-        self, tmp_path, isolated_config_dir
-    ):
+    def test_corrupt_store_falls_through_to_none(self, tmp_path, isolated_config_dir):
         """A garbage credentials.json must not crash discovery."""
         creds = isolated_config_dir / "credentials.json"
         creds.parent.mkdir(parents=True, exist_ok=True)
@@ -685,12 +681,13 @@ class TestGetTokenFromLocalRefresh:
         """Don't hit the network when the cached access_token is still valid."""
         self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=3600), "r1")
 
-        with patch(
-            "granola_export.paths.get_granola_data_dir",
-            return_value=tmp_path,
-        ), patch(
-            "granola_export.api_client.refresh_access_token"
-        ) as mock_refresh:
+        with (
+            patch(
+                "granola_export.paths.get_granola_data_dir",
+                return_value=tmp_path,
+            ),
+            patch("granola_export.api_client.refresh_access_token") as mock_refresh,
+        ):
             config = get_token_from_local()
 
         assert config is not None
@@ -702,13 +699,16 @@ class TestGetTokenFromLocalRefresh:
         self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "r1")
 
         refreshed = APIConfig(access_token="new-jwt", refresh_token="r1")
-        with patch(
-            "granola_export.paths.get_granola_data_dir",
-            return_value=tmp_path,
-        ), patch(
-            "granola_export.api_client.refresh_access_token",
-            return_value=refreshed,
-        ) as mock_refresh:
+        with (
+            patch(
+                "granola_export.paths.get_granola_data_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "granola_export.api_client.refresh_access_token",
+                return_value=refreshed,
+            ) as mock_refresh,
+        ):
             config = get_token_from_local()
 
         mock_refresh.assert_called_once_with("r1")
@@ -721,12 +721,13 @@ class TestGetTokenFromLocalRefresh:
         """
         self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "")
 
-        with patch(
-            "granola_export.paths.get_granola_data_dir",
-            return_value=tmp_path,
-        ), patch(
-            "granola_export.api_client.refresh_access_token"
-        ) as mock_refresh:
+        with (
+            patch(
+                "granola_export.paths.get_granola_data_dir",
+                return_value=tmp_path,
+            ),
+            patch("granola_export.api_client.refresh_access_token") as mock_refresh,
+        ):
             config = get_token_from_local()
 
         mock_refresh.assert_not_called()
@@ -740,12 +741,15 @@ class TestGetTokenFromLocalRefresh:
         """
         self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "r1")
 
-        with patch(
-            "granola_export.paths.get_granola_data_dir",
-            return_value=tmp_path,
-        ), patch(
-            "granola_export.api_client.refresh_access_token",
-            side_effect=AuthRefreshError("sign-in expired"),
+        with (
+            patch(
+                "granola_export.paths.get_granola_data_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "granola_export.api_client.refresh_access_token",
+                side_effect=AuthRefreshError("sign-in expired"),
+            ),
         ):
             with pytest.raises(AuthRefreshError):
                 get_token_from_local()
