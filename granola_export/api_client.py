@@ -781,8 +781,7 @@ class GranolaAPIClient:
             if not docs:
                 break
 
-            for doc in docs:
-                yield doc
+            yield from docs
 
             if len(docs) < limit:
                 break
