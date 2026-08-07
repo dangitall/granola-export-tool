@@ -110,7 +110,10 @@ class MarkdownExporter(BaseExporter):
         # YAML frontmatter
         if self.frontmatter:
             lines.append("---")
-            lines.append(f"title: \"{meeting.title.replace('\"', '\\')}\"")
+            # YAML double-quoted scalar: escape backslashes first, then quotes,
+            # so a title containing " or \ can't break out of the string.
+            title = meeting.title.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'title: "{title}"')
             if meeting.created_at:
                 lines.append(f"date: {meeting.created_at.isoformat()}")
             if meeting.document.participants:
