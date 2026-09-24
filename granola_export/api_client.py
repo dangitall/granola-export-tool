@@ -31,6 +31,11 @@ from .paths import (
 
 logger = logging.getLogger(__name__)
 
+# Refresh the access token once it has less than this long left. Access
+# tokens last 6 hours; a full export with transcripts can run for many
+# minutes and a 401 mid-run aborts it, so refresh well before expiry.
+REFRESH_MARGIN_SECONDS = 30 * 60
+
 # Endpoint Granola's app uses to mint a new access_token from a refresh_token.
 # It is intentionally excluded from the bearer-injecting request interceptor —
 # the body's refresh_token is the only credential.
@@ -157,7 +162,17 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
         raise AuthRefreshError(
             f"Could not refresh Granola access token: {e.reason}"
         ) from e
+    except (TimeoutError, OSError) as e:
+        # A socket timeout during read() is not wrapped in URLError, and
+        # gzip.BadGzipFile is an OSError.
+        raise AuthRefreshError(f"Could not refresh Granola access token: {e}") from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise AuthRefreshError(
+            "refresh-access-token returned a response that isn't JSON"
+        ) from e
 
+    if not isinstance(payload, dict):
+        raise AuthRefreshError("refresh-access-token response wasn't a JSON object")
     new_access = payload.get("access_token")
     if not new_access:
         raise AuthRefreshError("refresh-access-token response missing access_token")
@@ -378,7 +393,7 @@ def get_token_from_local() -> APIConfig | None:
             f"No Granola auth token found (checked {get_accounts_path()}, "
             f"{get_token_path()}, and {get_credentials_path()}). "
             "Is Granola installed and signed in? If Granola no longer writes "
-            "plaintext tokens, seed one with: granola-export auth --refresh-token <token>"
+            "plaintext tokens, seed one with: granola-export auth --refresh-token - (reads stdin)"
         )
         return None
 
@@ -388,10 +403,11 @@ def get_token_from_local() -> APIConfig | None:
         _persist_credentials(config)
 
     needs_refresh = bool(config.refresh_token) and (
-        not config.access_token or _is_jwt_expired(config.access_token)
+        not config.access_token
+        or _is_jwt_expired(config.access_token, REFRESH_MARGIN_SECONDS)
     )
     if needs_refresh:
-        logger.info("Cached access token expired; refreshing via Granola endpoint")
+        logger.info("Access token expired or expiring soon; refreshing it")
         config = refresh_access_token(config.refresh_token)
         _persist_credentials(config)
 

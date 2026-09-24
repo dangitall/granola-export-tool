@@ -102,7 +102,11 @@ class HTMLExporter(BaseExporter):
 
     def _generate_html(self, meetings: list[dict], stats: dict) -> str:
         """Generate the complete HTML document."""
-        meetings_json = json.dumps(meetings, ensure_ascii=False)
+        # Escape "</" so note or transcript text containing "</script>" can't
+        # close the inline <script> block and inject markup into the report
+        # (shared documents are written by other people). "<\/" is still
+        # valid JSON and decodes to the same string.
+        meetings_json = json.dumps(meetings, ensure_ascii=False).replace("</", "<\\/")
 
         return f"""<!DOCTYPE html>
 <html lang="en">

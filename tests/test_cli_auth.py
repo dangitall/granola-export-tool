@@ -89,3 +89,26 @@ class TestAuthStatus:
         _creds_path(isolated_config_dir).write_text("{ not json")
         rc = cmd_auth(_Args(status=True))
         assert rc == 1
+
+
+class TestAuthSeedFromStdin:
+    def test_dash_reads_token_from_stdin(self, isolated_config_dir, monkeypatch):
+        """`--refresh-token -` keeps the secret out of argv."""
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("stdin-refresh\n"))
+        minted = APIConfig(access_token="a", refresh_token="stdin-refresh")
+        with patch(
+            "granola_export.api_client.refresh_access_token", return_value=minted
+        ) as mock_refresh:
+            rc = cmd_auth(_Args(refresh_token="-"))
+
+        assert rc == 0
+        mock_refresh.assert_called_once_with("stdin-refresh")
+
+    def test_empty_stdin_fails(self, isolated_config_dir, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+        assert cmd_auth(_Args(refresh_token="-")) == 1
