@@ -102,11 +102,20 @@ class HTMLExporter(BaseExporter):
 
     def _generate_html(self, meetings: list[dict], stats: dict) -> str:
         """Generate the complete HTML document."""
-        # Escape "</" so note or transcript text containing "</script>" can't
-        # close the inline <script> block and inject markup into the report
-        # (shared documents are written by other people). "<\/" is still
-        # valid JSON and decodes to the same string.
-        meetings_json = json.dumps(meetings, ensure_ascii=False).replace("</", "<\\/")
+        # Escape every "<" (plus ">" and "&") so note or transcript text can't
+        # close the inline <script> block ("</script>") or push the parser
+        # into its escaped states ("<!--<script>"), which would inject markup
+        # or blank the report. Shared documents are written by other people.
+        # "<" is valid JSON and decodes to the same string. U+2028/2029
+        # are escaped for pre-ES2019 engines.
+        meetings_json = (
+            json.dumps(meetings, ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace(" ", "\\u2028")
+            .replace(" ", "\\u2029")
+        )
 
         return f"""<!DOCTYPE html>
 <html lang="en">

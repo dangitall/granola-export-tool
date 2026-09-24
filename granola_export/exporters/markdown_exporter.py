@@ -6,20 +6,32 @@ note-taking apps like Obsidian, Notion, or GitHub.
 """
 
 import json
+import re
 from datetime import datetime
 
 from ..models import MIN_DATETIME, ExportResult, Meeting
 from .base import BaseExporter
 
+# Characters json.dumps(ensure_ascii=False) leaves raw that YAML rejects
+# (DEL, C1 controls) or mangles (NEL), plus lone surrogates, which can't be
+# written as UTF-8. \uXXXX escapes are valid in both JSON and YAML.
+_YAML_UNSAFE = re.compile("[\x7f-\x9f\ud800-\udfff]")
+
+
+def _yaml_json(value) -> str:
+    """Serialize ``value`` as JSON that is also valid YAML flow syntax."""
+    text = json.dumps(value, ensure_ascii=False)
+    return _YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+
 
 def _yaml_quote(text: str) -> str:
     """Quote ``text`` as a YAML double-quoted scalar.
 
-    A JSON string literal is a valid YAML double-quoted scalar, and
     json.dumps escapes quotes, backslashes and newlines, so a title can't
-    break out of the string or the frontmatter block.
+    break out of the string or the frontmatter block; _yaml_json escapes
+    the remaining characters YAML won't accept raw.
     """
-    return json.dumps(text, ensure_ascii=False)
+    return _yaml_json(text)
 
 
 class MarkdownExporter(BaseExporter):
@@ -129,9 +141,7 @@ class MarkdownExporter(BaseExporter):
                 lines.append(f"date: {meeting.created_at.isoformat()}")
             if meeting.document.participants:
                 # JSON is valid YAML flow syntax, unlike a Python list repr.
-                participants = json.dumps(
-                    meeting.document.participants, ensure_ascii=False
-                )
+                participants = _yaml_json(meeting.document.participants)
                 lines.append(f"participants: {participants}")
             lines.append(f"id: {meeting.id}")
             lines.append(f"has_transcript: {meeting.has_transcript}")

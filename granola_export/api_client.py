@@ -138,7 +138,11 @@ def refresh_access_token(refresh_token: str) -> APIConfig:
             payload = json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 401 and e.fp is not None:
-            body_bytes = e.fp.read()
+            try:
+                body_bytes = e.fp.read()
+            except OSError:
+                # Includes timeouts; classify as a plain (retryable) failure.
+                body_bytes = b""
             # We consumed e.fp to classify the error; restore it so any
             # caller that inspects the chained __cause__ still sees the body.
             e.fp = io.BytesIO(body_bytes)
@@ -380,7 +384,11 @@ def get_token_from_local() -> APIConfig | None:
         APIConfig if a token was found, None otherwise.
 
     Raises:
-        AuthRefreshError: if the refresh_token itself was revoked.
+        AuthRefreshError: if a refresh was needed and failed while the
+            current access_token is unusable (missing or actually
+            expired), or whenever the refresh_token was revoked. A
+            transient failure while the token still works is logged and
+            the current token is returned.
     """
     config = _load_token_from_stored_accounts() or _load_token_from_supabase()
     from_granola = config is not None
@@ -408,7 +416,19 @@ def get_token_from_local() -> APIConfig | None:
     )
     if needs_refresh:
         logger.info("Access token expired or expiring soon; refreshing it")
-        config = refresh_access_token(config.refresh_token)
+        try:
+            refreshed = refresh_access_token(config.refresh_token)
+        except AuthRefreshError as e:
+            # Refreshing early is an optimization: if it fails transiently
+            # and the token still works, use it rather than fail the run.
+            still_valid = bool(config.access_token) and not _is_jwt_expired(
+                config.access_token
+            )
+            if e.revoked or not still_valid:
+                raise
+            logger.warning(f"{e}; continuing with the current access token")
+            return config
+        config = refreshed
         _persist_credentials(config)
 
     return config
