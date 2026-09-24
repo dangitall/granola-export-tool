@@ -7,7 +7,7 @@ note-taking apps like Obsidian, Notion, or GitHub.
 
 from datetime import datetime
 
-from ..models import ExportResult, Meeting
+from ..models import MIN_DATETIME, ExportResult, Meeting
 from .base import BaseExporter
 
 
@@ -54,7 +54,7 @@ class MarkdownExporter(BaseExporter):
 
         for meeting in sorted(
             self.cache.meetings(),
-            key=lambda m: m.created_at or datetime.min,
+            key=lambda m: m.created_at or MIN_DATETIME,
             reverse=True,
         ):
             try:

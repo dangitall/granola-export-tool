@@ -222,3 +222,31 @@ class TestMeeting:
         assert result["id"] == "doc-123"
         assert result["metadata"] == {"key": "value"}
         assert result["transcript"]["word_count"] == 2
+
+
+class TestDatetimeParsing:
+    """All model dates are timezone-aware so they can be compared."""
+
+    def test_epoch_ms_and_iso_are_both_aware_and_sortable(self):
+        from granola_export.models import MIN_DATETIME
+
+        docs = [
+            Document.from_dict("a", {"created_at": "2026-01-01T10:00:00Z"}),
+            Document.from_dict("b", {"createdAt": 1767261600000}),
+            Document.from_dict("c", {}),
+        ]
+
+        assert docs[0].created_at.tzinfo is not None
+        assert docs[1].created_at.tzinfo is not None
+        ordered = sorted(docs, key=lambda d: d.created_at or MIN_DATETIME)
+        assert [d.id for d in ordered] == ["c", "a", "b"]
+
+    def test_naive_iso_is_read_as_utc(self):
+        from datetime import UTC, datetime
+
+        doc = Document.from_dict("a", {"created_at": "2026-01-01T10:00:00"})
+
+        assert doc.created_at == datetime(2026, 1, 1, 10, tzinfo=UTC)
+
+    def test_garbage_timestamp_is_none(self):
+        assert Document.from_dict("a", {"created_at": "not a date"}).created_at is None

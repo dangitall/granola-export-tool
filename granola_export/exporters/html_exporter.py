@@ -8,7 +8,7 @@ search functionality, and a professional design.
 import json
 from datetime import datetime
 
-from ..models import ExportResult, Meeting
+from ..models import MIN_DATETIME, ExportResult, Meeting
 from .base import BaseExporter
 
 
@@ -43,7 +43,7 @@ class HTMLExporter(BaseExporter):
         meetings_data = []
         for meeting in sorted(
             self.cache.meetings(),
-            key=lambda m: m.created_at or datetime.min,
+            key=lambda m: m.created_at or MIN_DATETIME,
             reverse=True,
         ):
             try:
