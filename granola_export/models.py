@@ -74,11 +74,8 @@ def _parse_timestamp_string(value: str) -> float:
     Handles ISO 8601 strings (e.g. from the Granola API).  Returns 0
     on failure so callers never crash on unexpected formats.
     """
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return dt.timestamp()
-    except (ValueError, TypeError):
-        return 0
+    dt = parse_datetime(value)
+    return dt.timestamp() if dt else 0
 
 
 @dataclass

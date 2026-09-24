@@ -42,3 +42,29 @@ class TestFrontmatterTitleEscaping:
         title = 'Tricky: "quotes" and a \\ slash'
         line = _title_line(_exporter(tmp_path), title)
         assert yaml.safe_load(line) == {"title": title}
+
+
+class TestExport:
+    def test_same_day_same_title_meetings_both_written(self, tmp_path):
+        """Recurring same-titled meetings on one day must not overwrite."""
+        cache = MagicMock()
+        cache.meetings.return_value = [
+            Meeting(
+                document=Document.from_dict(
+                    doc_id, {"title": "Standup", "created_at": created}
+                )
+            )
+            for doc_id, created in [
+                ("aaaaaaaa-1", "2026-01-05T15:00:00Z"),
+                ("bbbbbbbb-2", "2026-01-05T17:00:00Z"),
+                # Mixed epoch-ms and missing dates must sort without error.
+                ("cccccccc-3", 1767628800000),
+                ("dddddddd-4", None),
+            ]
+        ]
+
+        result = MarkdownExporter(cache=cache, output_dir=tmp_path).export()
+
+        assert result.success, result.errors
+        notes = [p for p in tmp_path.glob("*.md") if p.name != "INDEX.md"]
+        assert len(notes) == 4
