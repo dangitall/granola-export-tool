@@ -136,11 +136,14 @@ class APIExporter(Exporter):
             candidates = by_prefix.get(doc_id[:8], [])
             if len(candidates) < 2:
                 continue
-            current = self._meeting_filename(doc)
-            if not (meetings_dir / current).exists():
+            current = meetings_dir / self._meeting_filename(doc)
+            if not current.exists():
                 continue
             for path in candidates:
-                if path.name == current:
+                # samefile, not a name comparison: on a case-insensitive
+                # filesystem (macOS default) a case-only rename rewrites
+                # the existing file, which keeps its old spelling on disk.
+                if path.samefile(current):
                     continue
                 try:
                     with open(path) as f:
@@ -222,12 +225,12 @@ class APIExporter(Exporter):
         self._prepare_output_dir()
         errors = []
 
-        # Load previous manifest for sync mode
-        previous_manifest = {}
-        previous_docs = {}
+        # The previous manifest drives sync-mode change detection, but is
+        # loaded in every mode: known folder IDs and pending-transcript
+        # flags must survive a non-sync run too.
+        previous_manifest = self._load_previous_manifest()
+        previous_docs = previous_manifest.get("documents", {})
         if self.sync_mode:
-            previous_manifest = self._load_previous_manifest()
-            previous_docs = previous_manifest.get("documents", {})
             if previous_docs:
                 logger.info(
                     f"Sync mode: found {len(previous_docs)} previously exported documents"
@@ -287,8 +290,9 @@ class APIExporter(Exporter):
                 known_ids=known_folder_ids or None,
                 missing=newly_missing,
             )
-            missing_folder_ids |= newly_missing
             fetched_ids = {f["id"] for f in folders if f.get("id")}
+            # A folder that comes back (e.g. re-shared) is no longer missing.
+            missing_folder_ids = (missing_folder_ids | newly_missing) - fetched_ids
             # Folders we know about but couldn't fetch this run (transient
             # failure) keep their last-known copy rather than vanishing
             # from folders.json.
@@ -342,7 +346,12 @@ class APIExporter(Exporter):
             errors.append(f"Network error fetching documents: {e.reason}")
 
         # Fetch shared documents from multiple discovery sources
-        if self.include_shared:
+        if self.include_shared and not listing_complete:
+            # Owned documents on unfetched pages would look "not seen" and
+            # be misfiled as shared (and possibly web-scraped over their
+            # full copies), so skip discovery until the listing is whole.
+            logger.error("Skipping shared-document discovery: listing incomplete")
+        elif self.include_shared:
             logger.info("Discovering shared documents...")
             shared_doc_ids: set[str] = set()
 
@@ -381,8 +390,16 @@ class APIExporter(Exporter):
 
                 # Step 1: try the batch API (works for workspace-shared docs)
                 api_fetched_ids: set[str] = set()
+                batch_failed: set[str] = set()
                 try:
-                    shared_docs = self.client.get_documents_batch(list(shared_doc_ids))
+                    shared_docs = self.client.get_documents_batch(
+                        sorted(shared_doc_ids), failed=batch_failed
+                    )
+                    if batch_failed:
+                        errors.append(
+                            f"Could not fetch {len(batch_failed)} shared "
+                            "documents via API; falling back to web pages"
+                        )
                     for doc in shared_docs:
                         doc["_shared"] = True
                         all_documents.append(doc)

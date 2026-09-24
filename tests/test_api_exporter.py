@@ -360,9 +360,7 @@ class TestSyncDataSafety:
     def test_failed_transcript_is_retried_next_sync(self, sync_exporter):
         docs = [{"id": "doc-1", "title": "M", "updated_at": "2025-01-01T00:00:00Z"}]
         self._setup(sync_exporter, docs)
-        sync_exporter.client.get_document_transcript.side_effect = _make_http_error(
-            500
-        )
+        sync_exporter.client.get_document_transcript.side_effect = _make_http_error(500)
         sync_exporter.export()
 
         # Same document, unchanged timestamp: the transcript is still retried.
@@ -423,7 +421,9 @@ class TestSyncDataSafety:
         sync_exporter.client.get_all_documents.return_value = iter(renamed)
         sync_exporter.export()
 
-        names = sorted(p.name for p in (sync_exporter.output_dir / "meetings").iterdir())
+        names = sorted(
+            p.name for p in (sync_exporter.output_dir / "meetings").iterdir()
+        )
         assert names == ["New_doc-1abc.json"]
 
     def test_rename_cleanup_keeps_other_documents(self, sync_exporter):
@@ -487,3 +487,78 @@ class TestFolderTracking:
         assert manifest["folder_ids"] == ["f1"]
         folders = json.loads((sync_exporter.output_dir / "folders.json").read_text())
         assert folders == [{"id": "f1", "title": "Kept"}]
+
+
+class TestReviewRegressions:
+    def _setup(self, exporter, docs):
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter(docs)
+        exporter.client.get_document_transcript.return_value = None
+        exporter.client.get_documents_batch.return_value = []
+        exporter.client.get_people.return_value = {}
+
+    def test_case_only_rename_keeps_the_file(self, sync_exporter):
+        """On case-insensitive filesystems the current file keeps its old
+        spelling; it must not be mistaken for a stale copy."""
+        meetings = sync_exporter.output_dir / "meetings"
+        meetings.mkdir(parents=True)
+        (meetings / "Standup_doc-1abc.json").write_text(json.dumps({"id": "doc-1abcd"}))
+        (meetings / "Old_doc-1abc.json").write_text(json.dumps({"id": "doc-1abcd"}))
+        docs = [{"id": "doc-1abcd", "title": "standup", "updated_at": "2025-01-01"}]
+        self._setup(sync_exporter, docs)
+
+        sync_exporter.export()
+
+        remaining = [
+            p
+            for p in meetings.iterdir()
+            if json.loads(p.read_text()).get("id") == "doc-1abcd"
+        ]
+        assert len(remaining) == 1
+        assert remaining[0].name.lower() == "standup_doc-1abc.json"
+
+    def test_partial_listing_skips_shared_discovery(self, sync_exporter):
+        def partial():
+            yield {"id": "owned-1", "title": "A"}
+            raise _make_http_error(500)
+
+        self._setup(sync_exporter, [])
+        sync_exporter.client.get_all_documents.return_value = partial()
+        # owned-2 sits in a folder but was on the page that failed.
+        sync_exporter.client.get_document_lists.return_value = [
+            {"id": "f1", "documents": [{"id": "owned-2"}]}
+        ]
+
+        sync_exporter.export()
+
+        sync_exporter.client.get_documents_batch.assert_not_called()
+
+    def test_pending_flag_survives_non_sync_run(self, exporter):
+        exporter.output_dir.mkdir(parents=True)
+        (exporter.output_dir / "manifest.json").write_text(
+            json.dumps(
+                {"documents": {"d1": {"updated_at": "x", "transcript_pending": True}}}
+            )
+        )
+        self._setup(exporter, [{"id": "d1", "title": "T", "updated_at": "x"}])
+        exporter.include_transcripts = False
+
+        exporter.export()
+
+        manifest = json.loads((exporter.output_dir / "manifest.json").read_text())
+        assert manifest["documents"]["d1"]["transcript_pending"] is True
+
+    def test_reappearing_folder_leaves_missing_list(self, sync_exporter):
+        sync_exporter.output_dir.mkdir(parents=True)
+        (sync_exporter.output_dir / "manifest.json").write_text(
+            json.dumps({"folder_ids": [], "missing_folder_ids": ["f1"]})
+        )
+        self._setup(sync_exporter, [])
+        sync_exporter.client.get_document_lists.return_value = [{"id": "f1"}]
+
+        sync_exporter.export()
+
+        manifest = json.loads((sync_exporter.output_dir / "manifest.json").read_text())
+        assert manifest["missing_folder_ids"] == []
+        assert manifest["folder_ids"] == ["f1"]

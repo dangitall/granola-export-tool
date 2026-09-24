@@ -794,7 +794,8 @@ class GranolaAPIClient:
     def get_documents_batch(
         self,
         document_ids: list[str],
-        batch_size: int = 100,
+        batch_size: int = 50,
+        failed: set[str] | None = None,
     ) -> list[dict]:
         """
         Fetch multiple documents by ID, including shared documents.
@@ -804,7 +805,12 @@ class GranolaAPIClient:
 
         Args:
             document_ids: List of document IDs.
-            batch_size: Documents per request.
+            batch_size: Documents per request. The endpoint rejects 100
+                IDs with HTTP 400 but accepts 50 (observed 2026-09).
+            failed: Optional set that receives the IDs of batches that
+                failed. When given, a failed batch is logged and skipped
+                so one bad batch doesn't discard the others; when omitted,
+                the first failure propagates. Auth errors always propagate.
 
         Returns:
             List of document dictionaries.
@@ -818,7 +824,14 @@ class GranolaAPIClient:
                 "include_last_viewed_panel": True,
             }
 
-            response = self._request("/v1/get-documents-batch", data=data)
+            try:
+                response = self._request("/v1/get-documents-batch", data=data)
+            except (urllib.error.HTTPError, urllib.error.URLError) as e:
+                if failed is None or getattr(e, "code", None) in (401, 403):
+                    raise
+                logger.error(f"Batch of {len(batch)} documents failed: {e}")
+                failed.update(batch)
+                continue
             docs = response.get("documents") or response.get("docs") or []
             all_docs.extend(docs)
 
@@ -971,8 +984,9 @@ class GranolaAPIClient:
         Args:
             known_ids: Optional list of folder IDs from a previous export
                       to use as fallback when the bulk endpoint fails.
-            missing: Optional set that receives the IDs the fallback
-                    confirmed are gone (HTTP 404). Folders that failed for
+            missing: Optional set that receives the known IDs confirmed
+                    gone: absent from a successful bulk response, or 404
+                    from the per-folder fallback. Folders that failed for
                     any other reason are *not* added: a network blip must
                     not be mistaken for a deletion.
 
@@ -987,8 +1001,15 @@ class GranolaAPIClient:
                 max_retries=1,
             )
             if isinstance(response, list):
-                return response
-            return response.get("lists") or response.get("document_lists") or []
+                folders = response
+            else:
+                folders = response.get("lists") or response.get("document_lists") or []
+            # The bulk response is the complete set, so any known ID it
+            # omits is gone.
+            if missing is not None and known_ids:
+                returned = {f.get("id") for f in folders if isinstance(f, dict)}
+                missing.update(set(known_ids) - returned)
+            return folders
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             logger.warning(f"Bulk folder endpoint failed: {e}")
 

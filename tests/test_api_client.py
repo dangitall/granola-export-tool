@@ -226,6 +226,15 @@ class TestDocumentListsFallback:
         assert [f["id"] for f in folders] == ["ok"]
         assert missing == {"gone"}
 
+    def test_bulk_success_reports_omitted_known_ids(self, client):
+        """A successful bulk response is authoritative for known IDs."""
+        missing: set[str] = set()
+        with patch.object(client, "_request", return_value={"lists": [{"id": "f1"}]}):
+            folders = client.get_document_lists(known_ids=["f1", "f2"], missing=missing)
+
+        assert [f["id"] for f in folders] == ["f1"]
+        assert missing == {"f2"}
+
     def test_auth_error_during_pagination_raises(self, client):
         """401/403 during pagination should still propagate."""
         page1 = {"docs": [{"id": "d1"}, {"id": "d2"}]}
@@ -778,3 +787,30 @@ class TestGetTokenFromLocalRefresh:
         ):
             with pytest.raises(AuthRefreshError):
                 get_token_from_local()
+
+
+class TestDocumentsBatch:
+    def test_default_batch_size_is_accepted_by_server(self, client):
+        """The endpoint 400s on 100 IDs; batches must stay at 50."""
+        with patch.object(client, "_request", return_value={"documents": []}) as req:
+            client.get_documents_batch([f"id-{i}" for i in range(120)])
+
+        sizes = [len(c.kwargs["data"]["document_ids"]) for c in req.call_args_list]
+        assert sizes == [50, 50, 20]
+
+    def test_failed_batch_is_isolated_when_tracking(self, client):
+        failed: set[str] = set()
+        with patch.object(
+            client,
+            "_request",
+            side_effect=[_make_http_error(400), {"documents": [{"id": "b"}]}],
+        ):
+            docs = client.get_documents_batch(["a", "b"], batch_size=1, failed=failed)
+
+        assert [d["id"] for d in docs] == ["b"]
+        assert failed == {"a"}
+
+    def test_auth_error_propagates_even_when_tracking(self, client):
+        with patch.object(client, "_request", side_effect=_make_http_error(401)):
+            with pytest.raises(urllib.error.HTTPError):
+                client.get_documents_batch(["a"], failed=set())
