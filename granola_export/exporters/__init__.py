@@ -25,15 +25,16 @@ __all__ = [
 ]
 
 
-def get_exporter(format_name: str) -> type[Exporter]:
+def get_exporter(format_name: str) -> type[BaseExporter]:
     """
     Get the exporter class for a given format.
 
     Args:
-        format_name: The export format (json, markdown, csv, html, api).
+        format_name: The export format (json, markdown, csv, html).
 
     Returns:
-        The exporter class.
+        The exporter class. The API exporter isn't listed: it fetches from
+        the network rather than reading a source (see ``api-export``).
 
     Raises:
         ValueError: If the format is not supported.
@@ -44,7 +45,6 @@ def get_exporter(format_name: str) -> type[Exporter]:
         "md": MarkdownExporter,
         "csv": CSVExporter,
         "html": HTMLExporter,
-        "api": APIExporter,
     }
 
     format_lower = format_name.lower()

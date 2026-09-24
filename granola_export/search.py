@@ -9,9 +9,12 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
-from .cache import GranolaCache
 from .models import Meeting, ensure_aware
+
+if TYPE_CHECKING:
+    from .sources import MeetingSource
 
 
 @dataclass
@@ -63,12 +66,12 @@ class MeetingSearcher:
     other criteria to find relevant meetings.
     """
 
-    def __init__(self, cache: GranolaCache):
+    def __init__(self, cache: "MeetingSource"):
         """
         Initialize the searcher.
 
         Args:
-            cache: A loaded GranolaCache instance.
+            cache: A meeting source (loaded on demand).
         """
         self.cache = cache
         if not cache.is_loaded:
@@ -275,12 +278,12 @@ class MeetingSearcher:
                 yield meeting
 
 
-def quick_search(cache: GranolaCache, query: str) -> list[SearchResult]:
+def quick_search(cache: "MeetingSource", query: str) -> list[SearchResult]:
     """
     Convenience function for quick text search.
 
     Args:
-        cache: A loaded GranolaCache.
+        cache: A meeting source.
         query: Search text.
 
     Returns:
