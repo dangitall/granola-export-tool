@@ -2,7 +2,7 @@
 
 import pytest
 
-from granola_export.paths import CONFIG_DIR_ENV
+from granola_export.paths import CONFIG_DIR_ENV, DATA_DIR_ENV
 
 
 @pytest.fixture(autouse=True)
@@ -14,4 +14,6 @@ def isolated_config_dir(tmp_path, monkeypatch):
     """
     config_dir = tmp_path / "granola-export-config"
     monkeypatch.setenv(CONFIG_DIR_ENV, str(config_dir))
+    # A data-dir override in the developer's shell must not leak into tests.
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
     return config_dir

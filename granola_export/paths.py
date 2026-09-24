@@ -5,6 +5,7 @@ Centralizes all Granola file path logic so each file name is defined
 once and every module resolves paths through the same function.
 """
 
+import json
 import logging
 import os
 import platform
@@ -49,6 +50,12 @@ ACCOUNTS_FILENAME = "stored-accounts.json"
 # Granola encrypting/removing its plaintext token files.
 CONFIG_DIR_ENV = "GRANOLA_EXPORT_CONFIG_DIR"
 CREDENTIALS_FILENAME = "credentials.json"
+STATE_FILENAME = "state.json"
+
+# Where `api-export` writes and the read commands (list, search, show,
+# stats, export, check) look for its output. See get_default_data_dir.
+DATA_DIR_ENV = "GRANOLA_EXPORT_DATA_DIR"
+DEFAULT_DATA_DIRNAME = "granola-api-export"
 
 
 def get_config_dir() -> Path:
@@ -98,3 +105,52 @@ def get_accounts_path() -> Path:
     Granola v7+ writes auth tokens here; older versions used supabase.json.
     """
     return get_granola_data_dir() / ACCOUNTS_FILENAME
+
+
+def get_state_path() -> Path:
+    """Return the path to this tool's small state file (last export dir)."""
+    return get_config_dir() / STATE_FILENAME
+
+
+def get_default_data_dir() -> Path:
+    """Return the api-export output directory the read commands should use.
+
+    Resolution order:
+      1. ``GRANOLA_EXPORT_DATA_DIR`` if set.
+      2. The directory the most recent ``api-export`` wrote to, so a cron
+         job exporting to a custom ``-o`` needs no extra configuration.
+      3. ``~/granola-api-export`` (api-export's own default).
+    """
+    override = os.environ.get(DATA_DIR_ENV)
+    if override:
+        return Path(override).expanduser()
+
+    try:
+        with open(get_state_path()) as f:
+            last = json.load(f).get("last_export_dir")
+        if isinstance(last, str) and last:
+            return Path(last)
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+
+    return Path.home() / DEFAULT_DATA_DIRNAME
+
+
+def record_export_dir(path: Path) -> None:
+    """Remember ``path`` as the latest api-export output (best effort)."""
+    state_path = get_state_path()
+    try:
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    state["last_export_dir"] = str(Path(path).expanduser().resolve())
+    tmp_path = state_path.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(state, indent=2))
+        os.replace(tmp_path, state_path)
+    except OSError as e:
+        logger.debug(f"Could not record export dir in {state_path}: {e}")
+        tmp_path.unlink(missing_ok=True)

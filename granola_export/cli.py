@@ -6,16 +6,21 @@ A comprehensive command-line interface for exporting and analyzing
 meeting notes and transcripts from the Granola app.
 
 Usage:
+    granola-export api-export --sync [-o DIR]   Download meetings from Granola
     granola-export export [--format FORMAT] [--output DIR]
     granola-export list [--limit N]
     granola-export search QUERY
     granola-export stats
     granola-export show MEETING_ID
+
+Everything except api-export and auth reads the directory api-export
+writes (see --data-dir); Granola's own local cache is now encrypted.
 """
 
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -24,10 +29,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import __version__
-from .cache import GranolaCache, get_default_cache_path
 from .exporters import AuthenticationError, get_exporter
 from .models import MIN_DATETIME
+from .paths import DATA_DIR_ENV, DEFAULT_DATA_DIRNAME, record_export_dir
 from .search import MeetingSearcher, SearchQuery
+from .sources import MeetingSource, open_source
 
 
 # ANSI color codes for terminal output
@@ -45,8 +51,6 @@ class Colors:
 
 def supports_color() -> bool:
     """Check if the terminal supports color."""
-    import os
-
     if os.getenv("NO_COLOR"):
         return False
     if not hasattr(sys.stdout, "isatty"):
@@ -133,6 +137,31 @@ def pad_right(text: str, width: int) -> str:
     return text + " " * max(0, width - visible)
 
 
+def load_source(
+    args: argparse.Namespace, spinner: str | None = None
+) -> MeetingSource | None:
+    """Open and load the meeting source for a read command.
+
+    Returns the loaded source, or None after printing an error (the caller
+    should exit 1).
+    """
+    source = open_source(data_dir=args.data_dir, cache_path=args.cache_path)
+    try:
+        if spinner:
+            with Spinner(spinner):
+                source.load()
+        else:
+            source.load()
+    except FileNotFoundError as e:
+        print_error(str(e))
+        print_hint("Run 'granola-export check' to see where data is read from")
+        return None
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print_error(f"Could not parse {source.source_path}: {e}")
+        return None
+    return source
+
+
 class Spinner:
     """Simple terminal spinner for long operations.
 
@@ -188,24 +217,26 @@ def cmd_export(args: argparse.Namespace) -> int:
     """Export Granola data to various formats."""
     print_header("Granola Export")
 
-    # Load cache
-    try:
-        with Spinner("Loading cache"):
-            cache = GranolaCache(args.cache_path)
-            cache.load()
-        print_success(f"Loaded cache from {cache.cache_path}")
-    except FileNotFoundError as e:
-        print_error(str(e))
-        print_hint("Run 'granola-export check' to verify your Granola installation")
+    cache = load_source(args, spinner="Loading meetings")
+    if cache is None:
         return 1
+    print_success(f"Loaded meetings from {cache.source_path}")
 
     # Get stats
     stats = cache.get_stats()
     print(f"Found {stats['documents']} documents, {stats['transcripts']} transcripts")
     print()
 
-    # Prepare output directory
-    output_dir = Path(args.output)
+    # Prepare output directory. Refuse to write into the api-export
+    # directory being read: the JSON exporter's all_meetings.json and
+    # manifest.json would overwrite the sync's own files.
+    output_dir = Path(args.output).expanduser()
+    source_path = Path(cache.source_path)
+    source_dir = source_path if source_path.is_dir() else source_path.parent
+    if output_dir.resolve() == source_dir.resolve():
+        print_error(f"Output directory {output_dir} is the directory being read")
+        print_hint("Choose a different --output")
+        return 1
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Get exporter
@@ -245,17 +276,14 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     """List all meetings."""
-    try:
-        with Spinner("Loading"):
-            cache = GranolaCache(args.cache_path)
-            cache.load()
-    except FileNotFoundError as e:
-        print_error(str(e))
-        print_hint("Run 'granola-export check' to verify your Granola installation")
+    cache = load_source(args, spinner="Loading")
+    if cache is None:
         return 1
 
+    # Transcripts aren't needed to list meetings, and parsing them all
+    # dominates load time; has_transcript() checks presence cheaply.
     meetings = sorted(
-        cache.meetings(),
+        cache.meetings(with_transcripts=False),
         key=lambda m: m.created_at or MIN_DATETIME,
         reverse=True,
     )
@@ -270,7 +298,7 @@ def cmd_list(args: argparse.Namespace) -> int:
                 "id": m.id,
                 "title": m.title,
                 "date": m.created_at.isoformat() if m.created_at else None,
-                "has_transcript": m.has_transcript,
+                "has_transcript": cache.has_transcript(m.id),
             }
             for m in meetings
         ]
@@ -283,10 +311,10 @@ def cmd_list(args: argparse.Namespace) -> int:
         print(c("No meetings found.", Colors.DIM))
         print()
         print("This could mean:")
-        print_hint("Granola hasn't synced any meetings yet")
-        print_hint("The cache file is from a fresh install")
+        print_hint("api-export hasn't downloaded any meetings yet")
+        print_hint("--data-dir points at the wrong directory")
         print()
-        print(f"Cache: {cache.cache_path}")
+        print(f"Source: {cache.source_path}")
         return 0
 
     # Table header
@@ -297,7 +325,9 @@ def cmd_list(args: argparse.Namespace) -> int:
         date_str = format_date(meeting.created_at)
         title = truncate(meeting.title, 43)
         transcript = (
-            c(" ✓", Colors.GREEN) if meeting.has_transcript else c(" -", Colors.DIM)
+            c(" ✓", Colors.GREEN)
+            if cache.has_transcript(meeting.id)
+            else c(" -", Colors.DIM)
         )
 
         # Use pad_right for proper alignment with ANSI codes
@@ -311,11 +341,8 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     """Search meetings."""
-    try:
-        cache = GranolaCache(args.cache_path)
-        cache.load()
-    except FileNotFoundError as e:
-        print_error(str(e))
+    cache = load_source(args)
+    if cache is None:
         return 1
 
     print_header(f"Search: {args.query}")
@@ -373,11 +400,8 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 def cmd_stats(args: argparse.Namespace) -> int:
     """Show statistics about the Granola data."""
-    try:
-        cache = GranolaCache(args.cache_path)
-        cache.load()
-    except FileNotFoundError as e:
-        print_error(str(e))
+    cache = load_source(args)
+    if cache is None:
         return 1
 
     print_header("Granola Statistics")
@@ -402,13 +426,13 @@ def cmd_stats(args: argparse.Namespace) -> int:
         print(f"  {label:<{max_label + 2}} {c(str(value), Colors.CYAN)}")
 
     print()
-    print(c(f"Cache: {stats['cache_path']}", Colors.DIM))
+    print(c(f"Source: {stats['cache_path']}", Colors.DIM))
 
     # Recent activity
     print()
     print(c("Recent Activity:", Colors.BOLD))
 
-    meetings = list(cache.meetings())
+    meetings = list(cache.meetings(with_transcripts=False))
     week_ago = datetime.now().astimezone() - timedelta(days=7)
     recent = [m for m in meetings if m.created_at and m.created_at >= week_ago]
 
@@ -428,17 +452,15 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 def cmd_show(args: argparse.Namespace) -> int:
     """Show details of a specific meeting."""
-    try:
-        cache = GranolaCache(args.cache_path)
-        cache.load()
-    except FileNotFoundError as e:
-        print_error(str(e))
+    cache = load_source(args)
+    if cache is None:
         return 1
 
     # Find the meeting — collect all prefix matches so we can detect
-    # ambiguity instead of silently returning the first hit.
+    # ambiguity instead of silently returning the first hit. Transcripts
+    # are attached below, only for the match.
     matches = []
-    for m in cache.meetings():
+    for m in cache.meetings(with_transcripts=False):
         if m.id == args.meeting_id:
             # Exact match — use it immediately, no ambiguity possible.
             matches = [m]
@@ -462,6 +484,7 @@ def cmd_show(args: argparse.Namespace) -> int:
         return 1
 
     meeting = matches[0]
+    meeting.transcript = cache.get_transcript(meeting.id)
 
     print_header(meeting.title)
 
@@ -522,6 +545,11 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
     from .api_client import AuthRefreshError, get_token_from_local
     from .exporters.api_exporter import APIExporter
+
+    if args.output is None:
+        env_dir = os.environ.get(DATA_DIR_ENV)
+        args.output = Path(env_dir) if env_dir else Path.home() / DEFAULT_DATA_DIRNAME
+    args.output = Path(args.output).expanduser()
 
     def _handle_refresh_error(e: AuthRefreshError) -> int:
         """Translate a refresh failure into a clean CLI exit.
@@ -592,6 +620,8 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         print_hint("Try logging out and back in to Granola to refresh your token")
         return 1
     elapsed = time.monotonic() - start
+    # Let list/search/show/stats/export find this directory without flags.
+    record_export_dir(args.output)
 
     if not _quiet:
         print()
@@ -637,39 +667,54 @@ def cmd_api_export(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Check if Granola cache exists and is readable."""
-    cache_path = args.cache_path or get_default_cache_path()
+    """Check that the data the read commands use exists and is current."""
+    source = open_source(data_dir=args.data_dir, cache_path=args.cache_path)
+    legacy = args.cache_path is not None
 
-    print_header("Granola Cache Check")
+    print_header("Granola Cache Check" if legacy else "Granola Export Check")
+    print(f"Reading from: {source.source_path}")
 
-    print(f"Expected path: {cache_path}")
-
-    if not cache_path.exists():
-        print_error("Cache file not found!")
-        print()
-        print("Make sure Granola is installed and has been run at least once.")
-        print("The app stores its data at:")
-        print("  macOS:   ~/Library/Application Support/Granola/cache-v3.json")
-        print("  Windows: %APPDATA%\\Granola\\cache-v3.json")
-        return 1
-
-    print_success("Cache file found")
-
-    # Try to load it
     try:
-        cache = GranolaCache(cache_path)
-        cache.load()
-        print_success("Cache loaded successfully")
-
-        stats = cache.get_stats()
-        print(f"\n  Documents: {stats['documents']}")
-        print(f"  Transcripts: {stats['transcripts']}")
-
-    except json.JSONDecodeError:
-        print_error("Cache file is corrupted or invalid JSON")
+        source.load()
+    except FileNotFoundError as e:
+        print_error(str(e).splitlines()[0])
+        print()
+        if legacy:
+            print("Granola now encrypts its local cache (cache-v6.json.enc), so")
+            print("--cache-path only works with an older plaintext cache file.")
+        print("Download your meetings from Granola first:")
+        print(f"  granola-export api-export --sync -o {source.source_path}")
+        print_hint(f"Or point at an existing export with --data-dir or ${DATA_DIR_ENV}")
         return 1
-    except Exception as e:
-        print_error(f"Failed to load cache: {e}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print_error(f"Could not parse {source.source_path}: {e}")
+        return 1
+
+    print_success("Meetings loaded")
+    print(f"\n  Documents:   {source.document_count}")
+    print(f"  Transcripts: {source.transcript_count}")
+
+    manifest = getattr(source, "manifest", None)
+    if manifest is None:
+        return 0
+
+    exported = manifest.get("export_date")
+    if exported:
+        try:
+            exported_at = datetime.fromisoformat(exported).astimezone()
+            age = datetime.now().astimezone() - exported_at
+            hours = age.total_seconds() / 3600
+            print(f"  Last export: {format_date(exported_at)} ({hours:.1f}h ago)")
+            if hours > 24:
+                print_warning("Export is over a day old; is the sync still running?")
+        except ValueError:
+            print(f"  Last export: {exported}")
+
+    errors = manifest.get("errors") or []
+    if errors:
+        print_warning(f"Last export reported {len(errors)} errors:")
+        for error in errors[:5]:
+            print(f"    {error}")
         return 1
 
     return 0
@@ -749,6 +794,9 @@ def create_parser() -> argparse.ArgumentParser:
         description="Export and analyze meeting notes from the Granola app.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Start by downloading your meetings (run it again, e.g. from cron, to sync):
+  %(prog)s api-export --sync
+
 Examples:
   %(prog)s export                     Export to JSON (default)
   %(prog)s export -f markdown -o ~/notes  Export to Markdown
@@ -766,10 +814,23 @@ Examples:
     )
 
     parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help=(
+            "api-export output directory to read meetings from "
+            f"(default: ${DATA_DIR_ENV}, else the last api-export -o, "
+            f"else ~/{DEFAULT_DATA_DIRNAME})"
+        ),
+    )
+    parser.add_argument(
         "--cache-path",
         type=Path,
         default=None,
-        help="Path to Granola cache file (default: auto-detect)",
+        help=(
+            "Read a plaintext Granola cache file instead (older installs "
+            "only; current Granola encrypts its cache)"
+        ),
     )
 
     parser.add_argument(
@@ -923,7 +984,7 @@ Examples:
     # Check command
     subparsers.add_parser(
         "check",
-        help="Check if Granola cache is accessible",
+        help="Check that exported meetings exist and are up to date",
     )
 
     # API Export command
@@ -935,8 +996,8 @@ Examples:
         "-o",
         "--output",
         type=Path,
-        default=Path.home() / "granola-api-export",
-        help="Output directory (default: ~/granola-api-export)",
+        default=None,
+        help=f"Output directory (default: ${DATA_DIR_ENV} or ~/{DEFAULT_DATA_DIRNAME})",
     )
     api_parser.add_argument(
         "--token",
