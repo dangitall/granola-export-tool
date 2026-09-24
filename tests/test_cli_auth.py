@@ -1,7 +1,7 @@
 """Tests for the `auth` CLI command (credential-store bootstrap)."""
 
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from granola_export.api_client import APIConfig, AuthRefreshError
 from granola_export.cli import cmd_auth
@@ -112,3 +112,19 @@ class TestAuthSeedFromStdin:
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
 
         assert cmd_auth(_Args(refresh_token="-")) == 1
+
+    def test_tty_prompts_without_echo(self, isolated_config_dir, monkeypatch):
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        monkeypatch.setattr("sys.stdin", stdin)
+        minted = APIConfig(access_token="a", refresh_token="typed")
+        with (
+            patch("getpass.getpass", return_value="typed\n") as prompt,
+            patch(
+                "granola_export.api_client.refresh_access_token", return_value=minted
+            ) as mock_refresh,
+        ):
+            assert cmd_auth(_Args(refresh_token="-")) == 0
+
+        prompt.assert_called_once()
+        mock_refresh.assert_called_once_with("typed")

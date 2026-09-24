@@ -781,7 +781,13 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
     if args.refresh_token == "-":
         # Read from stdin so the token stays out of shell history and `ps`.
-        args.refresh_token = sys.stdin.readline().strip()
+        # Interactively, prompt without echo instead of waiting silently.
+        if sys.stdin.isatty():
+            import getpass
+
+            args.refresh_token = getpass.getpass("Refresh token: ").strip()
+        else:
+            args.refresh_token = sys.stdin.readline().strip()
         if not args.refresh_token:
             print_error("No refresh token on stdin")
             return 1

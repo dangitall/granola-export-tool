@@ -84,3 +84,13 @@ class TestFrontmatterYaml:
         data = yaml.safe_load(front)
         assert data["title"] == "Line one\nline: two"
         assert data["participants"] == ["O'Brien", 'A "B"']
+
+    def test_control_characters_stay_valid_yaml(self, tmp_path):
+        yaml = pytest.importorskip("yaml")
+        title = "del\x7f nel\x85 c1\x9b"
+        meeting = Meeting(document=Document(id="d1", title=title, participants=[title]))
+        front = _exporter(tmp_path)._meeting_to_markdown(meeting).split("---\n")[1]
+
+        data = yaml.safe_load(front)
+        assert data["title"] == title
+        assert data["participants"] == [title]
