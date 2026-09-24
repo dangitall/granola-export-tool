@@ -1,0 +1,1248 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Granola API",
+    "description": "Unofficial OpenAPI specification for the Granola meeting notes API. Reverse-engineered from the Granola desktop application (v5.354.0). This API is undocumented and may change without notice.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Granola Export Tool",
+      "url": "https://github.com/dangitall/granola-export-tool"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.granola.ai",
+      "description": "Granola Production API"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v2/get-documents": {
+      "post": {
+        "operationId": "getDocuments",
+        "summary": "Get documents",
+        "description": "Fetch documents from the workspace. Only returns OWNED documents, not shared ones. Use /v1/get-documents-batch for shared documents.",
+        "tags": ["Documents"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetDocumentsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDocumentsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or expired token"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-documents-batch": {
+      "post": {
+        "operationId": "getDocumentsBatch",
+        "summary": "Get documents by ID",
+        "description": "Fetch multiple documents by their IDs. This is the ONLY way to fetch shared documents that aren't returned by /v2/get-documents.",
+        "tags": ["Documents"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetDocumentsBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDocumentsBatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-document-transcript": {
+      "post": {
+        "operationId": "getDocumentTranscript",
+        "summary": "Get document transcript",
+        "description": "Fetch the transcript/audio content for a specific document. Returns 404 if the document has no transcript (this is expected for documents without audio).",
+        "tags": ["Transcripts"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetTranscriptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcript data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Document has no transcript (expected condition)"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-workspaces": {
+      "post": {
+        "operationId": "getWorkspaces",
+        "summary": "Get workspaces",
+        "description": "Fetch all accessible workspaces for the authenticated user.",
+        "tags": ["Workspaces"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of workspaces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetWorkspacesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v2/get-document-lists": {
+      "post": {
+        "operationId": "getDocumentLists",
+        "summary": "Get document lists (folders) - UNRELIABLE",
+        "description": "Fetch all document lists/folders. WARNING: This endpoint frequently returns 500 errors. Use /v1/get-document-list with individual list_ids instead.",
+        "tags": ["Folders"],
+        "deprecated": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of folders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDocumentListsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error - this endpoint is known to be unreliable and frequently fails"
+          }
+        }
+      }
+    },
+    "/v1/get-document-lists": {
+      "post": {
+        "operationId": "getDocumentListsV1",
+        "summary": "Get document lists (folders) - v1 - UNRELIABLE",
+        "description": "Fetch all document lists/folders. WARNING: This endpoint frequently times out. Use /v1/get-document-list with individual list_ids instead.",
+        "tags": ["Folders"],
+        "deprecated": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of folders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetDocumentListsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          },
+          "504": {
+            "description": "Gateway timeout - this endpoint frequently times out"
+          }
+        }
+      }
+    },
+    "/v1/get-document-list": {
+      "post": {
+        "operationId": "getDocumentList",
+        "summary": "Get a single document list (folder)",
+        "description": "Fetch a single document list/folder by ID. This is the RELIABLE way to fetch folder data - use this instead of the bulk endpoints which are unreliable.",
+        "tags": ["Folders"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetDocumentListRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Folder details with documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing or invalid list_id parameter"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Folder not found or deleted"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-people": {
+      "post": {
+        "operationId": "getPeople",
+        "summary": "Get people/contacts",
+        "description": "Fetch all people/contacts data associated with the user's meetings.",
+        "tags": ["People"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "People data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPeopleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-panel-templates": {
+      "post": {
+        "operationId": "getPanelTemplates",
+        "summary": "Get panel templates",
+        "description": "Fetch available panel/section templates for meeting notes.",
+        "tags": ["Templates"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of panel templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPanelTemplatesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/get-feature-flags": {
+      "post": {
+        "operationId": "getFeatureFlags",
+        "summary": "Get feature flags",
+        "description": "Fetch feature flag configuration for the authenticated user.",
+        "tags": ["Configuration"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feature flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token from Granola's local storage (workos_tokens.access_token in supabase.json)"
+      }
+    },
+    "schemas": {
+      "GetDocumentsRequest": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "default": 100,
+            "description": "Maximum number of documents to return"
+          },
+          "offset": {
+            "type": "integer",
+            "default": 0,
+            "description": "Pagination offset"
+          },
+          "include_last_viewed_panel": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include information about the last viewed panel"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Filter by workspace ID"
+          }
+        }
+      },
+      "GetDocumentsResponse": {
+        "type": "object",
+        "properties": {
+          "docs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            }
+          }
+        }
+      },
+      "GetDocumentsBatchRequest": {
+        "type": "object",
+        "required": ["document_ids"],
+        "properties": {
+          "document_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "List of document IDs to fetch"
+          },
+          "include_last_viewed_panel": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "GetDocumentsBatchResponse": {
+        "type": "object",
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            },
+            "description": "Primary response field"
+          },
+          "docs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            },
+            "description": "Alternative response field (fallback)"
+          }
+        }
+      },
+      "Document": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true,
+            "description": "Document title. May be null for untitled meetings."
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Creation timestamp (ISO 8601 or milliseconds since epoch)"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "Alternative field name for creation timestamp"
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "Last update timestamp"
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "Alternative field name for update timestamp"
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of participant names"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Alternative field name"
+          },
+          "folderId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "folder_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "isShared": {
+            "type": "boolean"
+          },
+          "is_shared": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string",
+            "nullable": true,
+            "description": "AI-generated meeting summary"
+          },
+          "overview": {
+            "type": "string",
+            "nullable": true,
+            "description": "Meeting overview text"
+          },
+          "notes_markdown": {
+            "type": "string",
+            "nullable": true,
+            "description": "Meeting notes in Markdown format"
+          },
+          "notes_plain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Meeting notes in plain text"
+          },
+          "notes": {
+            "type": "object",
+            "description": "Structured notes content (ProseMirror/TipTap format)",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["doc"]
+              },
+              "content": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "creation_source": {
+            "type": "string",
+            "nullable": true,
+            "description": "How the document was created"
+          },
+          "calendarEventId": {
+            "type": "string",
+            "nullable": true
+          },
+          "hubspot_note_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true,
+            "description": "URL to linked HubSpot note"
+          },
+          "affinity_note_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "ID of linked Affinity note"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "transcribe": {
+            "type": "boolean",
+            "description": "Whether transcription is enabled"
+          },
+          "documentPanels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Panel"
+            },
+            "description": "Structured note panels/sections"
+          },
+          "people": {
+            "$ref": "#/components/schemas/PeopleData"
+          },
+          "google_calendar_event": {
+            "$ref": "#/components/schemas/CalendarEvent"
+          }
+        }
+      },
+      "Panel": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "panel_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Alternative field name"
+          },
+          "panel_type": {
+            "type": "string",
+            "description": "Type of panel (e.g., 'notes')"
+          },
+          "type": {
+            "type": "string",
+            "description": "Alternative field name for panel_type"
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "Panel content (may be Markdown or plain text)"
+          },
+          "text": {
+            "type": "string",
+            "description": "Alternative field name for content"
+          },
+          "order": {
+            "type": "integer",
+            "description": "Display order of the panel"
+          },
+          "sort_order": {
+            "type": "integer",
+            "description": "Alternative field name for order"
+          }
+        }
+      },
+      "PeopleData": {
+        "type": "object",
+        "properties": {
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attendee"
+            }
+          }
+        }
+      },
+      "Attendee": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "person": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "object",
+                    "properties": {
+                      "fullName": {
+                        "type": "string"
+                      },
+                      "givenName": {
+                        "type": "string"
+                      },
+                      "familyName": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "employment": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Company name"
+                      },
+                      "title": {
+                        "type": "string",
+                        "description": "Job title"
+                      }
+                    }
+                  },
+                  "linkedin": {
+                    "type": "object",
+                    "properties": {
+                      "handle": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "avatar": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              },
+              "company": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "domain": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "CalendarEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string",
+            "description": "Event title"
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "start": {
+            "type": "object",
+            "properties": {
+              "dateTime": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            }
+          },
+          "end": {
+            "type": "object",
+            "properties": {
+              "dateTime": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timeZone": {
+                "type": "string"
+              }
+            }
+          },
+          "htmlLink": {
+            "type": "string",
+            "format": "uri"
+          },
+          "organizer": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            }
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "string",
+                  "format": "email"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "responseStatus": {
+                  "type": "string",
+                  "enum": ["accepted", "declined", "tentative", "needsAction"]
+                },
+                "self": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "GetTranscriptRequest": {
+        "type": "object",
+        "required": ["document_id"],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "GetDocumentListRequest": {
+        "type": "object",
+        "required": ["list_id"],
+        "properties": {
+          "list_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The ID of the document list/folder to fetch"
+          }
+        }
+      },
+      "TranscriptResponse": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "description": "Direct array of segments"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "transcript": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSegment"
+                }
+              },
+              "segments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSegment"
+                },
+                "description": "Alternative field name"
+              },
+              "text": {
+                "type": "string",
+                "description": "Full transcript as plain text"
+              },
+              "audioSource": {
+                "type": "string",
+                "description": "Audio source (e.g., 'microphone')"
+              }
+            }
+          }
+        ]
+      },
+      "TranscriptSegment": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Spoken text content"
+          },
+          "startTime": {
+            "type": "number",
+            "format": "float",
+            "description": "Start time in seconds"
+          },
+          "start": {
+            "type": "number",
+            "format": "float",
+            "description": "Alternative field name"
+          },
+          "start_timestamp": {
+            "type": "number",
+            "format": "float",
+            "description": "Alternative field name"
+          },
+          "endTime": {
+            "type": "number",
+            "format": "float",
+            "description": "End time in seconds"
+          },
+          "end": {
+            "type": "number",
+            "format": "float",
+            "description": "Alternative field name"
+          },
+          "end_timestamp": {
+            "type": "number",
+            "format": "float",
+            "description": "Alternative field name"
+          },
+          "speaker": {
+            "type": "string",
+            "nullable": true,
+            "description": "Speaker name/identifier"
+          },
+          "source": {
+            "type": "string",
+            "nullable": true,
+            "description": "Alternative field name for speaker"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "float",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Transcription confidence score"
+          }
+        }
+      },
+      "GetWorkspacesResponse": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceWrapper"
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "workspaces": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/WorkspaceWrapper"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "WorkspaceWrapper": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "$ref": "#/components/schemas/Workspace"
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "is_locked": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "privacy_mode_enabled": {
+            "type": "boolean"
+          },
+          "sharing_link_visibility": {
+            "type": "string",
+            "nullable": true
+          },
+          "transcript_retention_hours": {
+            "type": "integer",
+            "nullable": true
+          },
+          "logo_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "company_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "allow_moving_notes": {
+            "type": "boolean"
+          },
+          "pre_call_email_enabled": {
+            "type": "boolean"
+          },
+          "affirmative_consent_enabled": {
+            "type": "boolean"
+          },
+          "chat_paste_enabled": {
+            "type": "boolean"
+          },
+          "allow_transfer_notes": {
+            "type": "boolean"
+          },
+          "allow_data_export": {
+            "type": "boolean"
+          },
+          "self_email_enabled": {
+            "type": "boolean"
+          },
+          "discoverable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GetDocumentListsResponse": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Folder"
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "lists": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Folder"
+                }
+              },
+              "document_lists": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Folder"
+                },
+                "description": "Alternative field name"
+              }
+            }
+          }
+        ]
+      },
+      "Folder": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "icon": {
+            "type": "object",
+            "nullable": true
+          },
+          "parent_document_list_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "Parent folder ID for nested folders"
+          },
+          "sort_order": {
+            "type": "integer"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "workspace_display_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "is_favourited": {
+            "type": "boolean"
+          },
+          "is_shared": {
+            "type": "boolean"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "workspace", "public"]
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Document"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              ]
+            },
+            "description": "Documents in this folder (may be full objects or just IDs)"
+          },
+          "document_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Alternative: just document IDs"
+          }
+        }
+      },
+      "GetPeopleResponse": {
+        "type": "object",
+        "properties": {
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attendee"
+            }
+          }
+        }
+      },
+      "GetPanelTemplatesResponse": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelTemplate"
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "panel_templates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PanelTemplate"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "PanelTemplate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Documents",
+      "description": "Meeting document operations"
+    },
+    {
+      "name": "Transcripts",
+      "description": "Meeting transcript/audio operations"
+    },
+    {
+      "name": "Workspaces",
+      "description": "Workspace management"
+    },
+    {
+      "name": "Folders",
+      "description": "Document list/folder operations"
+    },
+    {
+      "name": "People",
+      "description": "Contact and attendee operations"
+    },
+    {
+      "name": "Templates",
+      "description": "Panel template operations"
+    },
+    {
+      "name": "Configuration",
+      "description": "Application configuration"
+    }
+  ],
+  "externalDocs": {
+    "description": "Granola Export Tool Documentation",
+    "url": "https://github.com/dangitall/granola-export-tool"
+  }
+}
