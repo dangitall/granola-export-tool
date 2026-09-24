@@ -305,17 +305,17 @@ The read commands use the folder `api-export` writes. It is found in this order:
 
 1. `--data-dir DIR`
 2. The `GRANOLA_EXPORT_DATA_DIR` environment variable
-3. The folder the most recent `api-export` wrote to (remembered in
+3. The folder the most recent `api-export --sync` wrote to (remembered in
    `~/.config/granola-export/state.json`), so a cron job using `-o ~/granola`
-   needs no extra setup
+   needs no extra setup. One-off exports without `--sync` don't change it.
 4. `~/granola-api-export`
 
 ```bash
 granola-export --data-dir ~/granola list
 ```
 
-`export` refuses to write into the folder it is reading, since the JSON format
-would overwrite the sync's own files.
+`export` refuses to write into any `api-export` folder, including the one it is
+reading, since the JSON format would overwrite the sync's own files.
 
 ### Legacy plaintext cache
 

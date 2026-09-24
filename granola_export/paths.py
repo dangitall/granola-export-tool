@@ -117,8 +117,8 @@ def get_default_data_dir() -> Path:
 
     Resolution order:
       1. ``GRANOLA_EXPORT_DATA_DIR`` if set.
-      2. The directory the most recent ``api-export`` wrote to, so a cron
-         job exporting to a custom ``-o`` needs no extra configuration.
+      2. The directory the most recent ``api-export --sync`` wrote to, so a
+         cron job syncing to a custom ``-o`` needs no extra configuration.
       3. ``~/granola-api-export`` (api-export's own default).
     """
     override = os.environ.get(DATA_DIR_ENV)
@@ -130,7 +130,7 @@ def get_default_data_dir() -> Path:
             last = json.load(f).get("last_export_dir")
         if isinstance(last, str) and last:
             return Path(last)
-    except (OSError, json.JSONDecodeError, AttributeError):
+    except (OSError, ValueError, AttributeError):
         pass
 
     return Path.home() / DEFAULT_DATA_DIRNAME
@@ -143,7 +143,8 @@ def record_export_dir(path: Path) -> None:
         state = json.loads(state_path.read_text()) if state_path.exists() else {}
         if not isinstance(state, dict):
             state = {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError covers JSONDecodeError and UnicodeDecodeError.
         state = {}
     state["last_export_dir"] = str(Path(path).expanduser().resolve())
     tmp_path = state_path.with_suffix(f".{os.getpid()}.tmp")

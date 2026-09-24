@@ -213,6 +213,16 @@ class Spinner:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _is_api_export_dir(path: Path) -> bool:
+    """True if ``path`` holds api-export output (its manifest says so)."""
+    try:
+        with open(path / "manifest.json") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and manifest.get("export_format") == "api"
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Export Granola data to various formats."""
     print_header("Granola Export")
@@ -227,14 +237,15 @@ def cmd_export(args: argparse.Namespace) -> int:
     print(f"Found {stats['documents']} documents, {stats['transcripts']} transcripts")
     print()
 
-    # Prepare output directory. Refuse to write into the api-export
-    # directory being read: the JSON exporter's all_meetings.json and
-    # manifest.json would overwrite the sync's own files.
+    # Prepare output directory. Refuse to write into any api-export
+    # directory (the one being read, or any other, such as the cron job's):
+    # the JSON exporter's all_meetings.json and manifest.json would
+    # overwrite the sync's own files and reset its change tracking.
     output_dir = Path(args.output).expanduser()
     source_path = Path(cache.source_path)
     source_dir = source_path if source_path.is_dir() else source_path.parent
-    if output_dir.resolve() == source_dir.resolve():
-        print_error(f"Output directory {output_dir} is the directory being read")
+    if output_dir.resolve() == source_dir.resolve() or _is_api_export_dir(output_dir):
+        print_error(f"Output directory {output_dir} holds an api-export")
         print_hint("Choose a different --output")
         return 1
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -621,7 +632,10 @@ def cmd_api_export(args: argparse.Namespace) -> int:
         return 1
     elapsed = time.monotonic() - start
     # Let list/search/show/stats/export find this directory without flags.
-    record_export_dir(args.output)
+    # Only --sync runs count: that's the folder being kept current, and a
+    # one-off export elsewhere shouldn't redirect the read commands.
+    if args.sync:
+        record_export_dir(args.output)
 
     if not _quiet:
         print()

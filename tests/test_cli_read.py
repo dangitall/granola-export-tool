@@ -97,6 +97,18 @@ class TestReadCommands:
         assert rc == 1
         assert (export_dir / "all_meetings.json").read_text() == before
 
+    def test_export_refuses_other_api_export_dir(self, export_dir, tmp_path):
+        """E.g. the cron job's folder while --data-dir points at a copy."""
+        synced = tmp_path / "synced"
+        synced.mkdir()
+        manifest = json.dumps({"export_format": "api", "documents": {"d": {}}})
+        (synced / "manifest.json").write_text(manifest)
+
+        rc = _run("--data-dir", str(export_dir), "export", "-o", str(synced))
+
+        assert rc == 1
+        assert (synced / "manifest.json").read_text() == manifest
+
     def test_export_markdown(self, export_dir, tmp_path):
         out = tmp_path / "md"
 
@@ -123,6 +135,33 @@ class TestApiExportRecordsDir:
             "granola_export.exporters.api_exporter.APIExporter",
             return_value=exporter,
         ):
-            assert _run("api-export", "--token", "t", "-o", str(out)) == 0
+            assert _run("api-export", "--sync", "--token", "t", "-o", str(out)) == 0
 
         assert get_default_data_dir() == out.resolve()
+
+    def test_non_sync_export_is_not_recorded(self, tmp_path):
+        exporter = MagicMock()
+        exporter.client.check_connection.return_value = True
+        exporter.export.return_value = ExportResult(
+            success=True,
+            output_path="x",
+            documents_exported=0,
+            transcripts_exported=0,
+            format="api",
+        )
+        record_export_dir(tmp_path / "synced")
+        with patch(
+            "granola_export.exporters.api_exporter.APIExporter",
+            return_value=exporter,
+        ):
+            assert _run("api-export", "--token", "t", "-o", str(tmp_path / "x")) == 0
+
+        assert get_default_data_dir() == (tmp_path / "synced").resolve()
+
+    def test_unreadable_state_file_is_ignored(self, isolated_config_dir, tmp_path):
+        isolated_config_dir.mkdir(parents=True, exist_ok=True)
+        (isolated_config_dir / "state.json").write_bytes(b"\xff\xfe")
+
+        record_export_dir(tmp_path / "synced")
+
+        assert get_default_data_dir() == (tmp_path / "synced").resolve()
