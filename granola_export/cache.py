@@ -19,6 +19,7 @@ from .models import (
     Person,
     Transcript,
     Workspace,
+    ensure_aware,
 )
 
 # Re-exported for backward compatibility: cli.py and external consumers
@@ -381,10 +382,10 @@ class GranolaCache:
             if not meeting.created_at:
                 continue
 
-            if start_date and meeting.created_at < start_date:
+            if start_date and meeting.created_at < ensure_aware(start_date):
                 continue
 
-            if end_date and meeting.created_at > end_date:
+            if end_date and meeting.created_at > ensure_aware(end_date):
                 continue
 
             yield meeting

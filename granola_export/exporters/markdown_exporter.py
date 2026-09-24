@@ -7,7 +7,7 @@ note-taking apps like Obsidian, Notion, or GitHub.
 
 from datetime import datetime
 
-from ..models import ExportResult, Meeting
+from ..models import MIN_DATETIME, ExportResult, Meeting
 from .base import BaseExporter
 
 
@@ -54,7 +54,7 @@ class MarkdownExporter(BaseExporter):
 
         for meeting in sorted(
             self.cache.meetings(),
-            key=lambda m: m.created_at or datetime.min,
+            key=lambda m: m.created_at or MIN_DATETIME,
             reverse=True,
         ):
             try:
@@ -65,8 +65,10 @@ class MarkdownExporter(BaseExporter):
                 if meeting.created_at:
                     date_prefix = meeting.created_at.strftime("%Y-%m-%d_")
 
+                # The ID suffix keeps same-day meetings with the same title
+                # (e.g. recurring standups) from overwriting each other.
                 safe_title = self._safe_filename(meeting.title)
-                filename = f"{date_prefix}{safe_title}.md"
+                filename = f"{date_prefix}{safe_title}_{meeting.id[:8]}.md"
                 filepath = self.output_dir / filename
 
                 with open(filepath, "w", encoding="utf-8") as f:

@@ -26,6 +26,7 @@ from pathlib import Path
 from . import __version__
 from .cache import GranolaCache, get_default_cache_path
 from .exporters import AuthenticationError, get_exporter
+from .models import MIN_DATETIME
 from .search import MeetingSearcher, SearchQuery
 
 
@@ -255,7 +256,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
     meetings = sorted(
         cache.meetings(),
-        key=lambda m: m.created_at or datetime.min,
+        key=lambda m: m.created_at or MIN_DATETIME,
         reverse=True,
     )
 
@@ -328,7 +329,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     )
 
     if args.days:
-        search_query.date_from = datetime.now() - timedelta(days=args.days)
+        search_query.date_from = datetime.now().astimezone() - timedelta(days=args.days)
 
     # Execute search
     searcher = MeetingSearcher(cache)
@@ -408,12 +409,8 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print(c("Recent Activity:", Colors.BOLD))
 
     meetings = list(cache.meetings())
-    recent = [
-        m
-        for m in meetings
-        if m.created_at
-        and m.created_at.replace(tzinfo=None) >= datetime.now() - timedelta(days=7)
-    ]
+    week_ago = datetime.now().astimezone() - timedelta(days=7)
+    recent = [m for m in meetings if m.created_at and m.created_at >= week_ago]
 
     print(f"  Last 7 days: {len(recent)} meetings")
 

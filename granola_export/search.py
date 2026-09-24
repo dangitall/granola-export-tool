@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from .cache import GranolaCache
-from .models import Meeting
+from .models import Meeting, ensure_aware
 
 
 @dataclass
@@ -94,12 +94,13 @@ class MeetingSearcher:
     ) -> SearchResult | None:
         """Check if a meeting matches the query."""
         # Date filters
+        # Meeting dates are aware; callers may pass naive (local) bounds.
         if query.date_from and meeting.created_at:
-            if meeting.created_at < query.date_from:
+            if meeting.created_at < ensure_aware(query.date_from):
                 return None
 
         if query.date_to and meeting.created_at:
-            if meeting.created_at > query.date_to:
+            if meeting.created_at > ensure_aware(query.date_to):
                 return None
 
         # Transcript filter
@@ -239,7 +240,7 @@ class MeetingSearcher:
         Yields:
             Meeting objects from the specified period.
         """
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = datetime.now().astimezone() - timedelta(days=days)
 
         for meeting in self.cache.meetings():
             if meeting.created_at and meeting.created_at >= cutoff:

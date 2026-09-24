@@ -6,8 +6,43 @@ transcripts, and associated metadata.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+
+# Sort key for "no date": sorts before every real (timezone-aware) date.
+# A naive datetime.min can't be compared with aware datetimes.
+MIN_DATETIME = datetime.min.replace(tzinfo=UTC)
+
+
+def ensure_aware(dt: datetime) -> datetime:
+    """Return ``dt`` as an aware datetime, reading a naive one as local time."""
+    return dt.astimezone() if dt.tzinfo is None else dt
+
+
+def parse_datetime(value: Any) -> datetime | None:
+    """Parse a Granola timestamp into an aware datetime in local time.
+
+    Accepts epoch milliseconds (int/float) and ISO 8601 strings. Naive
+    ISO strings are treated as UTC, matching the API. Every model date
+    goes through here so comparisons never mix naive and aware values,
+    and display/filenames use the user's local calendar date.
+
+    Returns None for missing or unparseable values.
+    """
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(value / 1000, tz=UTC)
+        elif isinstance(value, str) and value:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+        else:
+            return None
+        return dt.astimezone()
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
 
 
 @dataclass
@@ -39,11 +74,8 @@ def _parse_timestamp_string(value: str) -> float:
     Handles ISO 8601 strings (e.g. from the Granola API).  Returns 0
     on failure so callers never crash on unexpected formats.
     """
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return dt.timestamp()
-    except (ValueError, TypeError):
-        return 0
+    dt = parse_datetime(value)
+    return dt.timestamp() if dt else 0
 
 
 @dataclass
@@ -233,27 +265,10 @@ class CalendarEvent:
     @classmethod
     def from_dict(cls, data: dict) -> "CalendarEvent":
         """Create a CalendarEvent from Granola's google_calendar_event format."""
-        start_time = None
-        end_time = None
-
-        start_data = data.get("start", {})
-        end_data = data.get("end", {})
-
-        if start_data.get("dateTime"):
-            try:
-                start_time = datetime.fromisoformat(
-                    start_data["dateTime"].replace("Z", "+00:00")
-                )
-            except (ValueError, TypeError):
-                pass
-
-        if end_data.get("dateTime"):
-            try:
-                end_time = datetime.fromisoformat(
-                    end_data["dateTime"].replace("Z", "+00:00")
-                )
-            except (ValueError, TypeError):
-                pass
+        start_data = data.get("start") or {}
+        end_data = data.get("end") or {}
+        start_time = parse_datetime(start_data.get("dateTime"))
+        end_time = parse_datetime(end_data.get("dateTime"))
 
         organizer = data.get("organizer", {})
 
@@ -343,32 +358,8 @@ class Document:
     def from_dict(cls, doc_id: str, data: dict, panels_data: list = None) -> "Document":
         """Create a Document from a dictionary."""
         # Parse timestamps (handle both camelCase and snake_case)
-        created_at = None
-        updated_at = None
-
-        created_str = data.get("createdAt") or data.get("created_at")
-        if created_str:
-            try:
-                if isinstance(created_str, (int, float)):
-                    created_at = datetime.fromtimestamp(created_str / 1000)
-                else:
-                    created_at = datetime.fromisoformat(
-                        created_str.replace("Z", "+00:00")
-                    )
-            except (ValueError, TypeError):
-                pass
-
-        updated_str = data.get("updatedAt") or data.get("updated_at")
-        if updated_str:
-            try:
-                if isinstance(updated_str, (int, float)):
-                    updated_at = datetime.fromtimestamp(updated_str / 1000)
-                else:
-                    updated_at = datetime.fromisoformat(
-                        updated_str.replace("Z", "+00:00")
-                    )
-            except (ValueError, TypeError):
-                pass
+        created_at = parse_datetime(data.get("createdAt") or data.get("created_at"))
+        updated_at = parse_datetime(data.get("updatedAt") or data.get("updated_at"))
 
         # Parse panels
         panels = []

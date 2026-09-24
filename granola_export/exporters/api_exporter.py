@@ -19,7 +19,7 @@ from ..api_client import (
     get_shared_doc_ids_from_local_cache,
     get_viewed_meeting_ids_from_leveldb,
 )
-from ..models import ExportResult
+from ..models import ExportResult, parse_datetime
 from .base import Exporter, safe_filename
 
 logger = logging.getLogger(__name__)
@@ -169,14 +169,6 @@ class APIExporter(Exporter):
             return {}
         return {f["id"]: f for f in folders if isinstance(f, dict) and f.get("id")}
 
-    @staticmethod
-    def _parse_timestamp(value: str) -> datetime | None:
-        """Parse an ISO 8601 timestamp string, returning None on failure."""
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return None
-
     def _is_document_changed(self, doc: dict, previous_docs: dict) -> tuple[bool, str]:
         """
         Check if a document has changed since the last export.
@@ -203,8 +195,8 @@ class APIExporter(Exporter):
             return True, "updated"
 
         # Parse to datetime to handle format variations (Z vs +00:00, etc.)
-        doc_dt = self._parse_timestamp(doc_updated_str)
-        prev_dt = self._parse_timestamp(prev_updated_str)
+        doc_dt = parse_datetime(doc_updated_str)
+        prev_dt = parse_datetime(prev_updated_str)
 
         if not doc_dt or not prev_dt:
             # Unparseable — assume changed to be safe

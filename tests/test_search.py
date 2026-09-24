@@ -41,3 +41,21 @@ class TestParticipantFilter:
         query = SearchQuery(participants=["carol nobody", "BOB ROE"])
 
         assert searcher._match_meeting(meeting, query) is not None
+
+
+class TestDateFilter:
+    def test_naive_bound_compares_with_aware_meeting_date(self):
+        """Callers may pass naive (local) bounds; this must not raise."""
+        from datetime import datetime
+
+        searcher = _searcher()
+        meeting = Meeting(
+            document=Document.from_dict("d1", {"created_at": "2026-01-01T10:00:00Z"})
+        )
+
+        assert searcher._match_meeting(
+            meeting, SearchQuery(date_from=datetime(2025, 1, 1))
+        )
+        assert not searcher._match_meeting(
+            meeting, SearchQuery(date_from=datetime(2027, 1, 1))
+        )
