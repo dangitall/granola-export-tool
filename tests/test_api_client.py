@@ -785,6 +785,39 @@ class TestGetTokenFromLocalRefresh:
         mock_refresh.assert_called_once_with("r1")
         assert config is refreshed
 
+    def test_transient_refresh_failure_keeps_still_valid_token(self, tmp_path):
+        """An early refresh that fails must not fail a run the token can do."""
+        token = _make_jwt(exp_offset_seconds=600)
+        self._write_accounts(tmp_path, token, "r1")
+
+        with (
+            patch("granola_export.paths.get_granola_data_dir", return_value=tmp_path),
+            patch(
+                "granola_export.api_client.refresh_access_token",
+                side_effect=AuthRefreshError("HTTP 503"),
+            ),
+        ):
+            config = get_token_from_local()
+
+        assert config.access_token == token
+
+    @pytest.mark.parametrize(
+        "error", [AuthRefreshError("HTTP 503"), AuthRefreshError("x", revoked=True)]
+    )
+    def test_refresh_failure_raises_when_token_unusable_or_revoked(
+        self, tmp_path, error
+    ):
+        expired = error.revoked is False
+        offset = -60 if expired else 600
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=offset), "r1")
+
+        with (
+            patch("granola_export.paths.get_granola_data_dir", return_value=tmp_path),
+            patch("granola_export.api_client.refresh_access_token", side_effect=error),
+        ):
+            with pytest.raises(AuthRefreshError):
+                get_token_from_local()
+
     def test_expired_token_without_refresh_token_returns_stale(self, tmp_path):
         """If we have nothing to refresh with, return what we've got rather
         than blow up here. The caller will see a 401 and surface it via the
