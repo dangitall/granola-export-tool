@@ -68,3 +68,19 @@ class TestExport:
         assert result.success, result.errors
         notes = [p for p in tmp_path.glob("*.md") if p.name != "INDEX.md"]
         assert len(notes) == 4
+
+
+class TestFrontmatterYaml:
+    def test_newline_in_title_and_participants_stay_valid_yaml(self, tmp_path):
+        yaml = pytest.importorskip("yaml")
+        meeting = Meeting(
+            document=Document(
+                id="d1", title="Line one\nline: two", participants=["O'Brien", 'A "B"']
+            )
+        )
+        md = _exporter(tmp_path)._meeting_to_markdown(meeting)
+        front = md.split("---\n")[1]
+
+        data = yaml.safe_load(front)
+        assert data["title"] == "Line one\nline: two"
+        assert data["participants"] == ["O'Brien", 'A "B"']

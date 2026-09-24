@@ -5,10 +5,21 @@ Exports meetings as formatted Markdown files suitable for
 note-taking apps like Obsidian, Notion, or GitHub.
 """
 
+import json
 from datetime import datetime
 
 from ..models import MIN_DATETIME, ExportResult, Meeting
 from .base import BaseExporter
+
+
+def _yaml_quote(text: str) -> str:
+    """Quote ``text`` as a YAML double-quoted scalar.
+
+    A JSON string literal is a valid YAML double-quoted scalar, and
+    json.dumps escapes quotes, backslashes and newlines, so a title can't
+    break out of the string or the frontmatter block.
+    """
+    return json.dumps(text, ensure_ascii=False)
 
 
 class MarkdownExporter(BaseExporter):
@@ -112,14 +123,16 @@ class MarkdownExporter(BaseExporter):
         # YAML frontmatter
         if self.frontmatter:
             lines.append("---")
-            # YAML double-quoted scalar: escape backslashes first, then quotes,
-            # so a title containing " or \ can't break out of the string.
-            title = meeting.title.replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'title: "{title}"')
+            title = _yaml_quote(meeting.title)
+            lines.append(f"title: {title}")
             if meeting.created_at:
                 lines.append(f"date: {meeting.created_at.isoformat()}")
             if meeting.document.participants:
-                lines.append(f"participants: {meeting.document.participants}")
+                # JSON is valid YAML flow syntax, unlike a Python list repr.
+                participants = json.dumps(
+                    meeting.document.participants, ensure_ascii=False
+                )
+                lines.append(f"participants: {participants}")
             lines.append(f"id: {meeting.id}")
             lines.append(f"has_transcript: {meeting.has_transcript}")
             if meeting.document.workspace_id:

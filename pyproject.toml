@@ -51,6 +51,7 @@ dev = [
     "black>=23.0",
     "ruff>=0.1.0",
     "mypy>=1.0",
+    "pyyaml>=6.0",  # validates Markdown frontmatter in tests
 ]
 
 [tool.setuptools.packages.find]
@@ -62,6 +63,8 @@ target-version = ["py312"]
 
 [tool.ruff]
 line-length = 88
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
