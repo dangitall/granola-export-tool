@@ -740,8 +740,11 @@ class GranolaAPIClient:
         """
         Iterate through all documents with automatic pagination.
 
-        Errors on individual pages are logged and stop pagination
-        (yielding whatever was fetched so far) rather than raising.
+        Documents from pages fetched before a failure are yielded first;
+        the failure itself is then re-raised. Callers must not treat a
+        partial listing as the complete set: skipping a failed page and
+        carrying on (the old behavior) silently dropped up to ``limit``
+        documents while the run still reported success.
 
         Args:
             workspace_id: Optional workspace filter.
@@ -749,9 +752,12 @@ class GranolaAPIClient:
 
         Yields:
             Document dictionaries.
+
+        Raises:
+            urllib.error.HTTPError, urllib.error.URLError: if any page
+                fails after ``_request``'s own retries are exhausted.
         """
         offset = 0
-        consecutive_errors = 0
 
         while True:
             try:
@@ -760,22 +766,9 @@ class GranolaAPIClient:
                     limit=limit,
                     offset=offset,
                 )
-                consecutive_errors = 0
             except (urllib.error.HTTPError, urllib.error.URLError) as e:
-                code = getattr(e, "code", None)
-                # Auth errors should still propagate
-                if code in (401, 403):
-                    raise
-                consecutive_errors += 1
                 logger.error(f"Error fetching documents at offset {offset}: {e}")
-                if consecutive_errors >= 2:
-                    logger.error(
-                        "Multiple consecutive page failures, stopping pagination"
-                    )
-                    break
-                # Skip this page and try the next
-                offset += limit
-                continue
+                raise
 
             docs = response.get("docs", [])
             if not docs:
@@ -963,7 +956,11 @@ class GranolaAPIClient:
                 return None
             raise
 
-    def get_document_lists(self, known_ids: list[str] | None = None) -> list[dict]:
+    def get_document_lists(
+        self,
+        known_ids: list[str] | None = None,
+        missing: set[str] | None = None,
+    ) -> list[dict]:
         """
         Fetch all document lists (folders).
 
@@ -974,6 +971,10 @@ class GranolaAPIClient:
         Args:
             known_ids: Optional list of folder IDs from a previous export
                       to use as fallback when the bulk endpoint fails.
+            missing: Optional set that receives the IDs the fallback
+                    confirmed are gone (HTTP 404). Folders that failed for
+                    any other reason are *not* added: a network blip must
+                    not be mistaken for a deletion.
 
         Returns:
             List of folder dictionaries with document IDs.
@@ -1005,6 +1006,8 @@ class GranolaAPIClient:
                 folder = self.get_document_list(list_id)
                 if folder:
                     folders.append(folder)
+                elif missing is not None:
+                    missing.add(list_id)
             except (urllib.error.HTTPError, urllib.error.URLError) as e:
                 logger.warning(f"Failed to fetch folder {list_id}: {e}")
         return folders

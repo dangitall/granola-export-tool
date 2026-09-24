@@ -179,27 +179,52 @@ class TestRetryLogic:
 class TestPaginationResilience:
     """Tests for get_all_documents error handling during pagination."""
 
-    def test_500_mid_pagination_yields_partial_results(self, client):
-        """A 500 during pagination should yield docs fetched so far."""
+    def test_500_mid_pagination_yields_partial_then_raises(self, client):
+        """Docs from earlier pages are yielded, then the failure propagates."""
         page1 = {"docs": [{"id": "d1"}, {"id": "d2"}]}
-        page2_error = _make_http_error(500)
-        # After the error, pagination skips ahead; second consecutive error stops it
-        page3_error = _make_http_error(500)
 
+        docs = []
         with patch.object(client, "get_documents") as mock_get:
-            mock_get.side_effect = [page1, page2_error, page3_error]
-            docs = list(client.get_all_documents(limit=2))
+            mock_get.side_effect = [page1, _make_http_error(500)]
+            with pytest.raises(urllib.error.HTTPError):
+                for doc in client.get_all_documents(limit=2):
+                    docs.append(doc)
 
-        assert len(docs) == 2
-        assert docs[0]["id"] == "d1"
+        assert [d["id"] for d in docs] == ["d1", "d2"]
 
-    def test_two_consecutive_page_errors_stops(self, client):
-        """Two consecutive page failures should stop pagination."""
+    def test_failed_page_is_not_skipped(self, client):
+        """A failed page must not be skipped in favor of later pages."""
+        page3 = {"docs": [{"id": "d5"}]}
         with patch.object(client, "get_documents") as mock_get:
-            mock_get.side_effect = [_make_http_error(500), _make_http_error(500)]
-            docs = list(client.get_all_documents(limit=2))
+            mock_get.side_effect = [_make_http_error(500), page3]
+            with pytest.raises(urllib.error.HTTPError):
+                list(client.get_all_documents(limit=2))
 
-        assert len(docs) == 0
+        assert mock_get.call_count == 1
+
+
+class TestDocumentListsFallback:
+    """Folder fallback must only report confirmed (404) deletions."""
+
+    def test_only_404s_reported_missing(self, client):
+        def fetch(list_id):
+            if list_id == "gone":
+                return None  # get_document_list maps 404 -> None
+            if list_id == "flaky":
+                raise urllib.error.URLError("timed out")
+            return {"id": list_id}
+
+        missing: set[str] = set()
+        with (
+            patch.object(client, "_request", side_effect=_make_http_error(500)),
+            patch.object(client, "get_document_list", side_effect=fetch),
+        ):
+            folders = client.get_document_lists(
+                known_ids=["ok", "gone", "flaky"], missing=missing
+            )
+
+        assert [f["id"] for f in folders] == ["ok"]
+        assert missing == {"gone"}
 
     def test_auth_error_during_pagination_raises(self, client):
         """401/403 during pagination should still propagate."""
