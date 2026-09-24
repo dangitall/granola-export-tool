@@ -108,6 +108,65 @@ class APIExporter(Exporter):
             return {}
 
     @staticmethod
+    def _meeting_filename(doc: dict) -> str:
+        """Filename for a document under meetings/: ``<title>_<id8>.json``."""
+        doc_id = doc.get("id") or "unknown"
+        return f"{safe_filename(doc.get('title'))}_{doc_id[:8]}.json"
+
+    def _remove_renamed_duplicates(
+        self, meetings_dir: Path, documents: list[dict]
+    ) -> None:
+        """Delete stale copies left behind when a meeting was renamed.
+
+        Filenames embed the title, so a rename writes a new file and would
+        otherwise leave the old one in place, duplicating the meeting.
+        Only files whose JSON ``id`` matches the document are removed, and
+        only once the current file exists; files for documents that are no
+        longer listed at all are kept as an archive.
+        """
+        by_prefix: dict[str, list[Path]] = {}
+        for path in meetings_dir.glob("*_*.json"):
+            prefix = path.stem.rsplit("_", 1)[-1]
+            by_prefix.setdefault(prefix, []).append(path)
+
+        for doc in documents:
+            doc_id = doc.get("id")
+            if not doc_id:
+                continue
+            candidates = by_prefix.get(doc_id[:8], [])
+            if len(candidates) < 2:
+                continue
+            current = self._meeting_filename(doc)
+            if not (meetings_dir / current).exists():
+                continue
+            for path in candidates:
+                if path.name == current:
+                    continue
+                try:
+                    with open(path) as f:
+                        stale_id = json.load(f).get("id")
+                except (OSError, json.JSONDecodeError, AttributeError):
+                    continue
+                if stale_id == doc_id:
+                    logger.info(f"Removing stale copy of renamed meeting: {path.name}")
+                    path.unlink(missing_ok=True)
+
+    def _load_previous_folders(self) -> dict[str, dict]:
+        """Return the previous run's folders.json keyed by folder ID."""
+        folders_path = self.output_dir / "folders.json"
+        if not folders_path.exists():
+            return {}
+        try:
+            with open(folders_path) as f:
+                folders = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not load previous folders: {e}")
+            return {}
+        if not isinstance(folders, list):
+            return {}
+        return {f["id"]: f for f in folders if isinstance(f, dict) and f.get("id")}
+
+    @staticmethod
     def _parse_timestamp(value: str) -> datetime | None:
         """Parse an ISO 8601 timestamp string, returning None on failure."""
         try:
@@ -127,6 +186,12 @@ class APIExporter(Exporter):
             return True, "new"
 
         prev_info = previous_docs[doc_id]
+
+        # A previous run wrote this document but failed to fetch its
+        # transcript; treat it as changed so the transcript is retried.
+        if prev_info.get("transcript_pending"):
+            return True, "updated"
+
         doc_updated_str = doc.get("updated_at") or doc.get("updatedAt")
         prev_updated_str = prev_info.get("updated_at")
 
@@ -201,20 +266,42 @@ class APIExporter(Exporter):
         # The local cache picks up new folders via websocket events.
         logger.info("Fetching folders...")
         manifest_ids = set(previous_manifest.get("folder_ids", []))
-        deleted_folder_ids = set(previous_manifest.get("deleted_folder_ids", []))
+        # ``missing_folder_ids`` holds only folders confirmed gone (404).
+        # Older manifests used ``deleted_folder_ids``, which also swallowed
+        # transient failures and so permanently excluded live folders.
+        # When migrating from one of those, re-probe everything it held.
+        if "missing_folder_ids" in previous_manifest:
+            missing_folder_ids = set(previous_manifest["missing_folder_ids"])
+        else:
+            missing_folder_ids = set()
+            manifest_ids |= set(previous_manifest.get("deleted_folder_ids", []))
+        previous_folders = self._load_previous_folders()
         local_cache_ids = set(get_folder_ids_from_local_cache())
-        known_folder_ids = list((manifest_ids | local_cache_ids) - deleted_folder_ids)
+        known_folder_ids = sorted(
+            (manifest_ids | local_cache_ids | set(previous_folders))
+            - missing_folder_ids
+        )
         try:
+            newly_missing: set[str] = set()
             folders = self.client.get_document_lists(
                 known_ids=known_folder_ids or None,
+                missing=newly_missing,
             )
+            missing_folder_ids |= newly_missing
+            fetched_ids = {f["id"] for f in folders if f.get("id")}
+            # Folders we know about but couldn't fetch this run (transient
+            # failure) keep their last-known copy rather than vanishing
+            # from folders.json.
+            for folder_id in known_folder_ids:
+                if (
+                    folder_id not in fetched_ids
+                    and folder_id not in missing_folder_ids
+                    and folder_id in previous_folders
+                ):
+                    folders.append(previous_folders[folder_id])
             if folders:
                 with open(self.output_dir / "folders.json", "w") as f:
                     json.dump(folders, f, indent=2)
-            # Track which IDs came back as 404 (deleted/gone)
-            fetched_ids = {f["id"] for f in folders if f.get("id")}
-            newly_deleted = set(known_folder_ids) - fetched_ids
-            deleted_folder_ids = deleted_folder_ids | newly_deleted
             logger.info(f"Found {len(folders)} folders")
         except urllib.error.HTTPError as e:
             self._check_auth_error(e)
@@ -230,6 +317,11 @@ class APIExporter(Exporter):
         logger.info("Fetching documents...")
         all_documents = []
         document_ids_seen = set()
+        # False when the owned-document listing stopped early. Anything
+        # derived from "the full set of documents" (all_meetings.json, the
+        # manifest's document list) must then not be rebuilt from this
+        # partial list, or a transient failure erases good output.
+        listing_complete = True
 
         try:
             for doc in self.client.get_all_documents(workspace_id=self.workspace_id):
@@ -241,9 +333,11 @@ class APIExporter(Exporter):
             logger.info(f"Found {len(all_documents)} owned documents")
         except urllib.error.HTTPError as e:
             self._check_auth_error(e)
+            listing_complete = False
             logger.error(f"HTTP {e.code} fetching documents: {e}")
             errors.append(f"Error fetching documents: HTTP {e.code}")
         except urllib.error.URLError as e:
+            listing_complete = False
             logger.error(f"Network error fetching documents: {e.reason}")
             errors.append(f"Network error fetching documents: {e.reason}")
 
@@ -351,15 +445,17 @@ class APIExporter(Exporter):
 
         # Write individual document files (only changed ones in sync mode)
         for doc in docs_to_write:
-            doc_id = doc.get("id", "unknown")
-            safe_title = safe_filename(doc.get("title"))
-            filename = f"{safe_title}_{doc_id[:8]}.json"
-
-            with open(meetings_dir / filename, "w") as f:
+            with open(meetings_dir / self._meeting_filename(doc), "w") as f:
                 json.dump(doc, f, indent=2)
 
-        # Fetch transcripts (only for documents we're writing)
+        self._remove_renamed_duplicates(meetings_dir, all_documents)
+
+        # Fetch transcripts (only for documents we're writing).
+        # ``transcript_pending`` collects documents whose transcript fetch
+        # failed or was skipped; the manifest flags them so the next sync
+        # retries them instead of treating the document as up to date.
         trans_exported = 0
+        transcript_pending: set[str] = set()
         if self.include_transcripts:
             logger.info("Fetching transcripts...")
             consecutive_failures = 0
@@ -393,12 +489,14 @@ class APIExporter(Exporter):
                     self._check_auth_error(e)
                     if e.code != 404:
                         consecutive_failures += 1
+                        transcript_pending.add(doc_id)
                         logger.error(f"HTTP {e.code} fetching transcript for {doc_id}")
                         errors.append(
                             f"Error fetching transcript for {doc_id}: HTTP {e.code}"
                         )
                 except urllib.error.URLError as e:
                     consecutive_failures += 1
+                    transcript_pending.add(doc_id)
                     logger.error(
                         f"Network error fetching transcript for {doc_id}: {e.reason}"
                     )
@@ -407,14 +505,17 @@ class APIExporter(Exporter):
                     )
 
                 if consecutive_failures >= 5:
-                    remaining = len(docs_to_write) - i - 1
+                    skipped_docs = docs_to_write[i + 1 :]
+                    transcript_pending.update(
+                        d["id"] for d in skipped_docs if d.get("id")
+                    )
                     logger.error(
                         f"Too many consecutive transcript failures, "
-                        f"skipping remaining {remaining} transcripts"
+                        f"skipping remaining {len(skipped_docs)} transcripts"
                     )
                     errors.append(
                         f"Stopped fetching transcripts after {consecutive_failures} "
-                        f"consecutive failures ({remaining} skipped)"
+                        f"consecutive failures ({len(skipped_docs)} skipped)"
                     )
                     break
 
@@ -434,28 +535,48 @@ class APIExporter(Exporter):
             logger.error(f"Network error fetching people: {e.reason}")
             errors.append(f"Network error fetching people: {e.reason}")
 
-        # Write combined documents file (all documents, not just changed)
-        with open(self.output_dir / "all_meetings.json", "w") as f:
-            json.dump(
-                {
-                    "export_date": datetime.now().isoformat(),
-                    "export_source": "api",
-                    "total_meetings": len(all_documents),
-                    "meetings": all_documents,
-                },
-                f,
-                indent=2,
+        # Write combined documents file (all documents, not just changed).
+        # Skipped on a partial listing: rebuilding it from an incomplete
+        # list would drop every meeting we failed to fetch this run.
+        if listing_complete:
+            with open(self.output_dir / "all_meetings.json", "w") as f:
+                json.dump(
+                    {
+                        "export_date": datetime.now().isoformat(),
+                        "export_source": "api",
+                        "total_meetings": len(all_documents),
+                        "meetings": all_documents,
+                    },
+                    f,
+                    indent=2,
+                )
+        else:
+            logger.error(
+                "Document listing was incomplete; leaving all_meetings.json "
+                "unchanged"
             )
 
-        # Build document tracking for manifest
+        # Build document tracking for manifest. On a partial listing, carry
+        # forward previous entries for documents we didn't see this run so
+        # the next sync doesn't mistake them for new.
         documents_manifest = {}
+        if not listing_complete:
+            documents_manifest.update(previous_docs)
         for doc in all_documents:
             doc_id = doc.get("id")
             if doc_id:
-                documents_manifest[doc_id] = {
+                entry = {
                     "updated_at": doc.get("updated_at") or doc.get("updatedAt"),
                     "title": doc.get("title"),
                 }
+                # Still pending if it failed now, or if a previous failure
+                # hasn't been retried because transcripts were disabled.
+                if doc_id in transcript_pending or (
+                    not self.include_transcripts
+                    and previous_docs.get(doc_id, {}).get("transcript_pending")
+                ):
+                    entry["transcript_pending"] = True
+                documents_manifest[doc_id] = entry
 
         # Write manifest with document tracking
         manifest = {
@@ -476,8 +597,13 @@ class APIExporter(Exporter):
                 "workspace_id": self.workspace_id,
             },
             "documents": documents_manifest,
-            "folder_ids": [f["id"] for f in folders if f.get("id")],
-            "deleted_folder_ids": sorted(deleted_folder_ids),
+            # Keep known-but-unfetched IDs so a later run can retry them;
+            # only confirmed 404s are dropped.
+            "folder_ids": sorted(
+                ({f["id"] for f in folders if f.get("id")} | set(known_folder_ids))
+                - missing_folder_ids
+            ),
+            "missing_folder_ids": sorted(missing_folder_ids),
             "errors": errors,
         }
 

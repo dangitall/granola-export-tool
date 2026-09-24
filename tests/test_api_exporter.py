@@ -1,5 +1,6 @@
 """Tests for API exporter error handling."""
 
+import json
 import urllib.error
 from io import BytesIO
 from pathlib import Path
@@ -344,3 +345,145 @@ class TestSyncMode:
         out = Path(sync_exporter.output_dir)
         assert (out / "manifest.json").exists()
         assert not (out / "manifest.json.tmp").exists()
+
+
+class TestSyncDataSafety:
+    """Failures during a sync must not silently lose data."""
+
+    def _setup(self, exporter, docs):
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_document_lists.return_value = []
+        exporter.client.get_all_documents.return_value = iter(docs)
+        exporter.client.get_document_transcript.return_value = [{"text": "hi"}]
+        exporter.client.get_people.return_value = {}
+
+    def test_failed_transcript_is_retried_next_sync(self, sync_exporter):
+        docs = [{"id": "doc-1", "title": "M", "updated_at": "2025-01-01T00:00:00Z"}]
+        self._setup(sync_exporter, docs)
+        sync_exporter.client.get_document_transcript.side_effect = _make_http_error(
+            500
+        )
+        sync_exporter.export()
+
+        # Same document, unchanged timestamp: the transcript is still retried.
+        sync_exporter.client.get_all_documents.return_value = iter(docs)
+        sync_exporter.client.get_document_transcript.side_effect = None
+        result = sync_exporter.export()
+
+        assert result.documents_exported == 1
+        assert result.transcripts_exported == 1
+        manifest = json.loads((sync_exporter.output_dir / "manifest.json").read_text())
+        assert "transcript_pending" not in manifest["documents"]["doc-1"]
+
+    @patch("granola_export.exporters.api_exporter.time.sleep")
+    def test_transcripts_skipped_by_cutoff_are_pending(self, _sleep, sync_exporter):
+        docs = [
+            {"id": f"doc-{i}", "title": "M", "updated_at": "2025-01-01T00:00:00Z"}
+            for i in range(7)
+        ]
+        self._setup(sync_exporter, docs)
+        sync_exporter.client.get_document_transcript.side_effect = (
+            urllib.error.URLError("down")
+        )
+        sync_exporter.export()
+
+        manifest = json.loads((sync_exporter.output_dir / "manifest.json").read_text())
+        assert all(e.get("transcript_pending") for e in manifest["documents"].values())
+
+    def test_partial_listing_keeps_previous_output(self, sync_exporter):
+        docs = [
+            {"id": "doc-1", "title": "A", "updated_at": "2025-01-01T00:00:00Z"},
+            {"id": "doc-2", "title": "B", "updated_at": "2025-01-01T00:00:00Z"},
+        ]
+        self._setup(sync_exporter, docs)
+        sync_exporter.export()
+        out = sync_exporter.output_dir
+        before = (out / "all_meetings.json").read_text()
+
+        def partial():
+            yield docs[0]
+            raise _make_http_error(500)
+
+        sync_exporter.client.get_all_documents.return_value = partial()
+        result = sync_exporter.export()
+
+        assert not result.success
+        assert (out / "all_meetings.json").read_text() == before
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert set(manifest["documents"]) == {"doc-1", "doc-2"}
+
+    def test_rename_removes_stale_file(self, sync_exporter):
+        docs = [{"id": "doc-1abcd", "title": "Old", "updated_at": "2025-01-01T00:00Z"}]
+        self._setup(sync_exporter, docs)
+        sync_exporter.export()
+
+        renamed = [
+            {"id": "doc-1abcd", "title": "New", "updated_at": "2025-02-01T00:00Z"}
+        ]
+        sync_exporter.client.get_all_documents.return_value = iter(renamed)
+        sync_exporter.export()
+
+        names = sorted(p.name for p in (sync_exporter.output_dir / "meetings").iterdir())
+        assert names == ["New_doc-1abc.json"]
+
+    def test_rename_cleanup_keeps_other_documents(self, sync_exporter):
+        """A different document sharing the 8-char prefix is never deleted."""
+        docs = [{"id": "doc-1abcd", "title": "Mine", "updated_at": "2025-01-01T00:00Z"}]
+        self._setup(sync_exporter, docs)
+        meetings = sync_exporter.output_dir / "meetings"
+        meetings.mkdir(parents=True)
+        (meetings / "Other_doc-1abc.json").write_text(json.dumps({"id": "doc-1abzz"}))
+
+        sync_exporter.export()
+
+        assert (meetings / "Other_doc-1abc.json").exists()
+
+
+class TestFolderTracking:
+    """Only confirmed 404s may mark a folder as gone."""
+
+    def _setup(self, exporter):
+        exporter.client.get_workspaces.return_value = []
+        exporter.client.get_all_documents.return_value = iter([])
+        exporter.client.get_people.return_value = {}
+
+    def _write_manifest(self, exporter, manifest):
+        exporter.output_dir.mkdir(parents=True, exist_ok=True)
+        (exporter.output_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_legacy_deleted_ids_are_reprobed(self, sync_exporter):
+        self._setup(sync_exporter)
+        self._write_manifest(
+            sync_exporter, {"folder_ids": [], "deleted_folder_ids": ["f1", "f2"]}
+        )
+
+        def lists(known_ids=None, missing=None):
+            missing.add("f2")
+            return [{"id": "f1", "title": "Real"}]
+
+        sync_exporter.client.get_document_lists.side_effect = lists
+        sync_exporter.export()
+
+        known = sync_exporter.client.get_document_lists.call_args.kwargs["known_ids"]
+        assert known == ["f1", "f2"]
+        manifest = json.loads((sync_exporter.output_dir / "manifest.json").read_text())
+        assert manifest["folder_ids"] == ["f1"]
+        assert manifest["missing_folder_ids"] == ["f2"]
+        assert "deleted_folder_ids" not in manifest
+
+    def test_transient_failure_keeps_folder(self, sync_exporter):
+        self._setup(sync_exporter)
+        self._write_manifest(
+            sync_exporter, {"folder_ids": ["f1"], "missing_folder_ids": []}
+        )
+        (sync_exporter.output_dir / "folders.json").write_text(
+            json.dumps([{"id": "f1", "title": "Kept"}])
+        )
+        # Bulk and fallback both failed: nothing fetched, nothing 404'd.
+        sync_exporter.client.get_document_lists.return_value = []
+        sync_exporter.export()
+
+        manifest = json.loads((sync_exporter.output_dir / "manifest.json").read_text())
+        assert manifest["folder_ids"] == ["f1"]
+        folders = json.loads((sync_exporter.output_dir / "folders.json").read_text())
+        assert folders == [{"id": "f1", "title": "Kept"}]
