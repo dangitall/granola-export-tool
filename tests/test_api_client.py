@@ -693,6 +693,23 @@ class TestRefreshAccessToken:
         with pytest.raises(AuthRefreshError):
             refresh_access_token("any-token")
 
+    @pytest.mark.parametrize("body", [b"<html>502</html>", b"[1, 2]", b"\xff\xfe"])
+    @patch("urllib.request.urlopen")
+    def test_non_json_or_non_object_body_wrapped(self, mock_urlopen, body):
+        mock_urlopen.return_value = _make_response(body)
+
+        with pytest.raises(AuthRefreshError):
+            refresh_access_token("any-token")
+
+    @patch("urllib.request.urlopen")
+    def test_read_timeout_wrapped(self, mock_urlopen):
+        response = _make_response()
+        response.read.side_effect = TimeoutError("read timed out")
+        mock_urlopen.return_value = response
+
+        with pytest.raises(AuthRefreshError, match="read timed out"):
+            refresh_access_token("any-token")
+
 
 class TestGetTokenFromLocalRefresh:
     """`get_token_from_local` transparently refreshes expired access tokens."""
@@ -731,6 +748,26 @@ class TestGetTokenFromLocalRefresh:
     def test_expired_token_triggers_refresh(self, tmp_path):
         """The whole point of this change: stale JWT → refresh, return new config."""
         self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=-3600), "r1")
+
+        refreshed = APIConfig(access_token="new-jwt", refresh_token="r1")
+        with (
+            patch(
+                "granola_export.paths.get_granola_data_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "granola_export.api_client.refresh_access_token",
+                return_value=refreshed,
+            ) as mock_refresh,
+        ):
+            config = get_token_from_local()
+
+        mock_refresh.assert_called_once_with("r1")
+        assert config is refreshed
+
+    def test_token_expiring_within_margin_is_refreshed(self, tmp_path):
+        """A token with 10 minutes left could expire mid-export; refresh it."""
+        self._write_accounts(tmp_path, _make_jwt(exp_offset_seconds=600), "r1")
 
         refreshed = APIConfig(access_token="new-jwt", refresh_token="r1")
         with (
