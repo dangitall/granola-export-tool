@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from .prosemirror import to_markdown
+
 # Sort key for "no date": sorts before every real (timezone-aware) date.
 # A naive datetime.min can't be compared with aware datetimes.
 MIN_DATETIME = datetime.min.replace(tzinfo=UTC)
@@ -74,8 +76,15 @@ def _parse_timestamp_string(value: str) -> float:
     Handles ISO 8601 strings (e.g. from the Granola API).  Returns 0
     on failure so callers never crash on unexpected formats.
     """
-    dt = parse_datetime(value)
-    return dt.timestamp() if dt else 0
+    # Hot path (every transcript segment): skip parse_datetime's local-time
+    # conversion, which doesn't affect the epoch value.
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.timestamp()
 
 
 @dataclass
@@ -199,7 +208,9 @@ class Panel:
             id=data.get("id", ""),
             panel_type=data.get("type", data.get("panelType", "unknown")),
             title=data.get("title", ""),
-            content=data.get("content", data.get("text", "")),
+            # Granola stores panel content as ProseMirror JSON; render it
+            # so exporters and search always see text.
+            content=to_markdown(data.get("content", data.get("text", ""))),
             order=data.get("order", 0),
             raw_data=data,
         )
@@ -369,7 +380,8 @@ class Document:
                     panels.append(Panel.from_dict(panel))
 
         # Extract participants and detailed attendees from people dict
-        participants = data.get("participants", [])
+        # Copy: appending attendee names below must not mutate the raw dict.
+        participants = list(data.get("participants") or [])
         attendees = []
         people_data = data.get("people", {})
         if isinstance(people_data, dict):

@@ -4,6 +4,11 @@ A comprehensive CLI utility for exporting and analyzing meeting notes from the [
 
 Extract your meetings, transcripts, and notes in multiple formats for backup, migration, or analysis.
 
+> **How it works:** Granola now encrypts its local cache, so this tool downloads
+> your meetings from Granola's API into a local folder (`api-export --sync`), and
+> every other command (`list`, `search`, `show`, `stats`, `export`, `check`)
+> reads that folder. Run the sync from cron to keep it current.
+
 ## Features
 
 - **Multiple Export Formats**
@@ -49,7 +54,10 @@ pip install granola-export
 ## Quick Start
 
 ```bash
-# Check if Granola data is accessible
+# Download your meetings (re-run any time; only new/changed meetings are fetched)
+granola-export api-export --sync
+
+# Check the download is present and recent
 granola-export check
 
 # Export all meetings to JSON
@@ -178,7 +186,8 @@ granola-export show abc123 --json > meeting.json
 
 ### `check`
 
-Verify Granola cache is accessible.
+Verify the downloaded meetings exist, show when the last `api-export` ran, and
+report any errors it hit. Exits 1 if there is no export or the last run had errors.
 
 ```bash
 granola-export check
@@ -186,10 +195,9 @@ granola-export check
 
 ### `api-export`
 
-Export directly from Granola's servers instead of local cache. This is useful for:
-- Fetching shared documents not in your local cache
-- Getting fresher data without waiting for sync
-- Team-wide exports with proper API access
+Download meetings from Granola's servers. This is the data source for every other
+command: it writes the folder that `list`, `search`, `show`, `stats`, `export` and
+`check` read. It also fetches shared documents, including ones in shared folders.
 
 ```bash
 granola-export api-export [OPTIONS]
@@ -197,7 +205,7 @@ granola-export api-export [OPTIONS]
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output` | Output directory (default: ~/granola-api-export) |
+| `-o, --output` | Output directory (default: `$GRANOLA_EXPORT_DATA_DIR` or ~/granola-api-export) |
 | `--token` | API access token (default: auto-detect from local storage) |
 | `--workspace` | Filter by workspace ID |
 | `--no-transcripts` | Skip fetching transcripts |
@@ -293,18 +301,29 @@ Single self-contained HTML file with:
 
 ## Data Location
 
-Granola stores data locally:
+The read commands use the folder `api-export` writes. It is found in this order:
 
-| Platform | Path |
-|----------|------|
-| macOS | `~/Library/Application Support/Granola/cache-v6.json` |
-| Windows | `%APPDATA%\Granola\cache-v6.json` |
-| Linux | `~/.config/Granola/cache-v6.json` |
-
-Use `--cache-path` to specify a custom location:
+1. `--data-dir DIR`
+2. The `GRANOLA_EXPORT_DATA_DIR` environment variable
+3. The folder the most recent `api-export --sync` wrote to (remembered in
+   `~/.config/granola-export/state.json`), so a cron job using `-o ~/granola`
+   needs no extra setup. One-off exports without `--sync` don't change it.
+4. `~/granola-api-export`
 
 ```bash
-granola-export export --cache-path /path/to/cache-v6.json
+granola-export --data-dir ~/granola list
+```
+
+`export` refuses to write into any `api-export` folder, including the one it is
+reading, since the JSON format would overwrite the sync's own files.
+
+### Legacy plaintext cache
+
+Current Granola releases encrypt their cache (`cache-v6.json.enc`). If you have an
+older plaintext cache file, `--cache-path` still reads it:
+
+```bash
+granola-export --cache-path /path/to/cache-v6.json list
 ```
 
 ## Python API
@@ -312,11 +331,13 @@ granola-export export --cache-path /path/to/cache-v6.json
 Use as a library in your own scripts:
 
 ```python
-from granola_export import GranolaCache
+from pathlib import Path
+
+from granola_export import ExportStore
 from granola_export.search import MeetingSearcher, SearchQuery
 
-# Load cache
-cache = GranolaCache()
+# Load the folder written by `granola-export api-export --sync`
+cache = ExportStore(Path("~/granola-api-export").expanduser())
 cache.load()
 
 # Iterate meetings
@@ -333,7 +354,6 @@ for result in searcher.search(query):
 
 # Export programmatically
 from granola_export.exporters import MarkdownExporter
-from pathlib import Path
 
 exporter = MarkdownExporter(cache, Path("./output"))
 result = exporter.export()

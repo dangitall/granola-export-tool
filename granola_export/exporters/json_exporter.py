@@ -125,7 +125,7 @@ class JSONExporter(BaseExporter):
         manifest = {
             "export_format": "json",
             "export_date": datetime.now().isoformat(),
-            "source_path": str(self.cache.cache_path),
+            "source_path": str(self.cache.source_path),
             "statistics": self.cache.get_stats(),
             "files": {
                 "meetings_directory": str(meetings_dir),

@@ -5,9 +5,12 @@ Base exporter class defining the export interface.
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ..cache import GranolaCache
 from ..models import ExportResult
+
+if TYPE_CHECKING:
+    from ..sources import MeetingSource
 
 
 def safe_filename(name: str | None, max_length: int = 50) -> str:
@@ -50,9 +53,10 @@ class Exporter(ABC):
 
 class BaseExporter(Exporter):
     """
-    Abstract base for cache-based exporters (JSON, Markdown, CSV, HTML).
+    Abstract base for source-based exporters (JSON, Markdown, CSV, HTML).
 
-    Subclasses receive a loaded GranolaCache and must implement export().
+    Subclasses receive a loaded MeetingSource (an api-export directory or a
+    legacy Granola cache) and must implement export().
     """
 
     format_name: str = "base"
@@ -60,7 +64,7 @@ class BaseExporter(Exporter):
 
     def __init__(
         self,
-        cache: GranolaCache,
+        cache: "MeetingSource",
         output_dir: Path,
         include_transcripts: bool = True,
         include_raw: bool = False,
@@ -69,7 +73,7 @@ class BaseExporter(Exporter):
         Initialize the exporter.
 
         Args:
-            cache: The loaded GranolaCache instance.
+            cache: The loaded meeting source (ExportStore or GranolaCache).
             output_dir: Directory to write exported files.
             include_transcripts: Whether to include transcript data.
             include_raw: Whether to include raw/original data.

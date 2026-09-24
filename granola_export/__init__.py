@@ -12,6 +12,7 @@ __author__ = "Granola Export Tool Contributors"
 
 from .api_client import GranolaAPIClient, get_token_from_local
 from .cache import GranolaCache
+from .export_store import ExportStore
 from .models import (
     Attendee,
     CalendarEvent,
@@ -24,6 +25,7 @@ from .models import (
 )
 
 __all__ = [
+    "ExportStore",
     "GranolaCache",
     "GranolaAPIClient",
     "get_token_from_local",

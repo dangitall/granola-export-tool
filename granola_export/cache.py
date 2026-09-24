@@ -54,6 +54,11 @@ class GranolaCache:
         self._loaded = False
 
     @property
+    def source_path(self) -> Path:
+        """The file being read (shown to users as the data source)."""
+        return self.cache_path
+
+    @property
     def is_loaded(self) -> bool:
         """Check if the cache has been loaded."""
         return self._loaded
@@ -82,10 +87,14 @@ class GranolaCache:
         with open(self.cache_path, encoding="utf-8") as f:
             raw_data = json.load(f)
 
-        # Granola uses double-encoded JSON
-        cache_str = raw_data.get("cache", "{}")
-        inner_data = json.loads(cache_str)
-        self._state = inner_data.get("state", {})
+        # Older caches double-encode the payload as a JSON string; newer
+        # ones (v4+) store it as a plain object. Accept both.
+        inner_data = raw_data.get("cache", {})
+        if isinstance(inner_data, str):
+            inner_data = json.loads(inner_data)
+        self._state = (
+            inner_data.get("state", {}) if isinstance(inner_data, dict) else {}
+        )
         self._loaded = True
 
         return self
@@ -198,9 +207,18 @@ class GranolaCache:
         for doc_id, trans_data in transcripts.items():
             yield Transcript.from_dict(doc_id, trans_data)
 
-    def meetings(self) -> Iterator[Meeting]:
+    def has_transcript(self, doc_id: str) -> bool:
+        """Check whether a document has a transcript entry."""
+        self._ensure_loaded()
+        return doc_id in self._state.get("transcripts", {})
+
+    def meetings(self, with_transcripts: bool = True) -> Iterator[Meeting]:
         """
         Iterate over all meetings with their transcripts and metadata.
+
+        Args:
+            with_transcripts: Accepted for interface parity with
+                ExportStore; the cache holds transcripts in memory already.
 
         Yields:
             Meeting objects combining document, transcript, and metadata.
