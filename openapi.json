@@ -461,7 +461,8 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "List of document IDs to fetch"
+            "maxItems": 50,
+            "description": "List of document IDs to fetch. The server rejects 100 IDs with HTTP 400; 50 works (observed 2026-09)."
           },
           "include_last_viewed_panel": {
             "type": "boolean",
