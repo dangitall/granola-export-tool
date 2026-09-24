@@ -96,8 +96,8 @@ def print_success(text: str) -> None:
 
 
 def print_warning(text: str) -> None:
-    """Print a warning message. Never suppressed."""
-    print(c(f"! {text}", Colors.YELLOW))
+    """Print a warning message to stderr. Never suppressed."""
+    print(c(f"! {text}", Colors.YELLOW), file=sys.stderr)
 
 
 def format_date(dt: datetime | None) -> str:
@@ -319,6 +319,13 @@ def cmd_search(args: argparse.Namespace) -> int:
         return 1
 
     print_header(f"Search: {args.query}")
+
+    if args.regex:
+        try:
+            re.compile(args.query)
+        except re.error as e:
+            print_error(f"Invalid regular expression: {e}")
+            return 2
 
     # Build search query
     search_query = SearchQuery(
@@ -697,7 +704,9 @@ def cmd_auth(args: argparse.Namespace) -> int:
         print(f"Store path: {creds_path}")
         if not creds_path.exists():
             print_error("No credentials stored")
-            print_hint("Seed one with: granola-export auth --refresh-token <token>")
+            print_hint(
+                "Seed one with: granola-export auth --refresh-token -  (reads stdin)"
+            )
             return 1
         try:
             data = json.loads(creds_path.read_text())
@@ -711,9 +720,18 @@ def cmd_auth(args: argparse.Namespace) -> int:
         print(f"  access_token:  {'yes' if has_access else 'no'}")
         return 0 if has_refresh else 1
 
+    if args.refresh_token == "-":
+        # Read from stdin so the token stays out of shell history and `ps`.
+        args.refresh_token = sys.stdin.readline().strip()
+        if not args.refresh_token:
+            print_error("No refresh token on stdin")
+            return 1
+
     if not args.refresh_token:
         print_error("Nothing to do")
-        print_hint("Use --refresh-token <token> to seed, or --status to inspect")
+        print_hint(
+            "Use --refresh-token - (reads stdin) to seed, or --status to inspect"
+        )
         return 1
 
     print_header("Seeding Granola Export Credentials")
@@ -975,7 +993,10 @@ Examples:
         "--refresh-token",
         type=str,
         default=None,
-        help="Refresh token to verify and persist for future exports",
+        help=(
+            "Refresh token to verify and persist for future exports. Pass '-' "
+            "to read it from stdin, keeping it out of shell history and ps"
+        ),
     )
     auth_parser.add_argument(
         "--status",
